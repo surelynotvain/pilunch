@@ -2,34 +2,25 @@ import { useEffect, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import { useApp } from "../store/app";
 import { api, errorText } from "../lib/ipc";
-import { providerReady } from "../lib/models";
+import { activeModel, modelPatch, providerReady } from "../lib/models";
 import type { ModelInfo, Provider } from "../lib/types";
 
-const PROVIDERS: {
-  id: Provider;
-  title: string;
-  text: string;
-  icon: IconName;
-}[] = [
-  {
-    id: "anthropic",
-    title: "Anthropic",
-    text: "Claude with an API key",
-    icon: "key",
-  },
-  {
-    id: "openrouter",
-    title: "OpenRouter",
-    text: "Hundreds of models, one key",
-    icon: "globe",
-  },
-  {
-    id: "local",
-    title: "Local",
-    text: "Ollama, LM Studio, vLLM, llama.cpp",
-    icon: "cpu",
-  },
+const PROVIDERS: { id: Provider; title: string; text: string; icon: IconName }[] = [
+  { id: "anthropic", title: "Anthropic", text: "Claude with an API key", icon: "key" },
+  { id: "openai", title: "OpenAI", text: "GPT models with an API key", icon: "bulb" },
+  { id: "google", title: "Google", text: "Gemini via AI Studio", icon: "globe" },
+  { id: "xai", title: "xAI", text: "Grok models", icon: "chat" },
+  { id: "openrouter", title: "OpenRouter", text: "Hundreds of models, one key", icon: "plug" },
+  { id: "local", title: "Local", text: "Ollama, LM Studio, vLLM, llama.cpp", icon: "cpu" },
 ];
+
+/** API-key providers with a model list: where to get a key, key prefix, env var. */
+const KEYED: Partial<Record<Provider, { help: string; placeholder: string; env: string }>> = {
+  openai: { help: "Create a key at platform.openai.com/api-keys.", placeholder: "sk-…", env: "OPENAI_API_KEY" },
+  google: { help: "Create a key at aistudio.google.com/apikey (Gemini API).", placeholder: "AIza…", env: "GEMINI_API_KEY" },
+  xai: { help: "Create a key at console.x.ai.", placeholder: "xai-…", env: "XAI_API_KEY" },
+  openrouter: { help: "One key for Claude, GPT, Gemini, Grok, DeepSeek, Qwen and more. Create it at openrouter.ai/keys.", placeholder: "sk-or-…", env: "OPENROUTER_API_KEY" },
+};
 
 type Status = { ok: boolean; text: string } | null;
 
@@ -187,19 +178,16 @@ export function ProviderPicker() {
           </>
         )}
 
-        {p === "openrouter" && (
+        {KEYED[p] && (
           <>
-            <p className="provider-help">One key for Claude, GPT, Gemini, Grok, DeepSeek, Qwen and more. Create it at openrouter.ai/keys.</p>
-            <KeyRow provider="openrouter" has={s.hasOpenrouterKey} placeholder="sk-or-…" />
-            {s.hasOpenrouterKey && (
+            <p className="provider-help">
+              {KEYED[p]!.help} Or set {KEYED[p]!.env}.
+            </p>
+            <KeyRow provider={p} has={!!s.providerKeys[p]} placeholder={KEYED[p]!.placeholder} />
+            {s.providerKeys[p] && (
               <>
                 <div className="onb-label">Model</div>
-                <ModelSelect
-                  provider="openrouter"
-                  value={s.openrouterModel}
-                  refresh={s.hasOpenrouterKey}
-                  onChange={(v) => void update({ openrouterModel: v })}
-                />
+                <ModelSelect provider={p} value={activeModel(s)} refresh={s.providerKeys[p]} onChange={(v) => void update(modelPatch(p, v))} />
               </>
             )}
           </>

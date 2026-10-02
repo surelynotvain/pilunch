@@ -223,7 +223,8 @@ try {
     const req = requests().at(-1);
     assert(req.body.model === "claude-opus-5-5", "default model");
     assert(req.body.stream === true && req.body.thinking?.type === "adaptive", "adaptive thinking + streaming");
-    assert(req.body.tools.length === 19 && req.body.tools.some((t) => t.name === "find_replace"), `tools sent: ${req.body.tools.length}`);
+    // 19 built-in tools + skill_load, skill_save and browser
+    assert(req.body.tools.length === 22 && req.body.tools.some((t) => t.name === "find_replace"), `tools sent: ${req.body.tools.length}`);
     assert(req.body.system[0].text.includes(ws), "system prompt has workspace root");
     await shot("chat-answer");
   });
@@ -339,6 +340,68 @@ try {
     await click("[data-testid=activity-chats]");
     await waitFor("history entry", async () => (await textOf("[data-testid=chat-list]"))?.includes("Say hello"));
     await shot("chat-history");
+  });
+
+  await step("agent saves a skill (with approval)", async () => {
+    await sendChat("Remember our release steps as a skill");
+    await waitEl(".tool.pending", 20000);
+    const diff = await textOf(".tool.pending .diff");
+    assert(diff.includes("+1. Bump the version in Cargo.toml"), `skill diff: ${diff}`);
+    await click(".tool.pending .btn.primary");
+    await idle();
+    const file = path.join(configDir, "skills/release-steps/SKILL.md");
+    await waitFor("skill written", async () => fs.existsSync(file));
+    assert(fs.readFileSync(file, "utf8").includes("description: How to cut a release"), "skill front matter");
+    const tools = requests().at(-1).body.tools.map((t) => t.name);
+    assert(tools.includes("skill_load") && tools.includes("skill_save") && tools.includes("browser"), `extension tools offered: ${tools}`);
+  });
+
+  await step("customize hub: skills, tools, MCP, plugins, usage, traces", async () => {
+    await click("[data-testid=activity-customize]");
+    await waitEl("[data-testid=customize]");
+    await click("[data-testid=hub-skills]");
+    await waitFor("agent skill listed", async () => (await textOf("[data-testid=customize]"))?.includes("release-steps"));
+    await click("[data-testid=skill-new]");
+    await type("[data-testid=skill-name]", "code-style");
+    await type("[data-testid=skill-body]", "Use four spaces.");
+    await click("[data-testid=skill-save]");
+    await waitFor("skill saved from UI", async () => fs.existsSync(path.join(configDir, "skills/code-style/SKILL.md")));
+    await shot("customize-skills");
+    await click("[data-testid=hub-tools]");
+    await click("[data-testid=tool-new]");
+    await click("[data-testid=tool-save]");
+    await waitFor("tool saved", async () => fs.existsSync(path.join(configDir, "tools/count_todos.json")));
+    await click("[data-testid=hub-mcp]");
+    await waitEl("[data-testid=mcp-json]");
+    await click("[data-testid=hub-plugins]");
+    await click("[data-testid=hub-usage]");
+    await waitEl("[data-testid=usage-cards]");
+    await waitFor("usage recorded", async () => !(await textOf("[data-testid=usage-cards]"))?.startsWith("Today\n0"));
+    await shot("usage");
+    await click("[data-testid=hub-traces]");
+    await click("[data-testid=traces-toggle]");
+    await waitFor("traces enabled", async () => JSON.parse(fs.readFileSync(path.join(configDir, "settings.json"), "utf8")).saveTraces === true);
+    await shot("traces");
+    await exec(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await waitFor("hub closed", async () => !(await find("[data-testid=customize]")));
+  });
+
+  await step("traces are saved for new runs", async () => {
+    await sendChat("Say hello again");
+    await idle();
+    const dir = path.join(dataDir, "traces");
+    await waitFor("trace file", async () => fs.existsSync(dir) && fs.readdirSync(dir).some((f) => f.endsWith(".json")));
+    const trace = JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir).find((f) => f.endsWith(".json"))), "utf8"));
+    assert(trace.messages[0].role === "system" && trace.messages.some((m) => m.reasoning_content), "trace has system prompt and reasoning");
+  });
+
+  await step("browser panel", async () => {
+    await click("[data-testid=activity-browser]");
+    await waitEl("[data-testid=browser-panel]");
+    await waitEl("[data-testid=browser-url]");
+    await shot("browser");
+    await click("[data-testid=activity-browser]");
+    await waitFor("browser hidden", async () => !(await find("[data-testid=browser-panel]")));
   });
 
   await step("light theme", async () => {

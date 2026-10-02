@@ -62,7 +62,7 @@ function EmptyChat({ docked }: { docked: boolean }) {
           </>
         )}
       </h1>
-      {!workspace && <p>An AI code editor for Claude, OpenRouter and local models. Open a project folder and PiLunch can read, edit and run your code — always asking first.</p>}
+      {!workspace && <p>An AI code editor for Claude, GPT, Gemini, Grok, OpenRouter and local models. Open a project folder and PiLunch can read, edit and run your code — always asking first.</p>}
       {!hasKey && <ConnectCard />}
       {!workspace && (
         <>

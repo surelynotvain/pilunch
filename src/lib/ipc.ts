@@ -13,6 +13,16 @@ import type {
   GrepOptions,
   GrepResult,
   ModelInfo,
+  BrowserOutcome,
+  BuildResult,
+  McpServerStatus,
+  Plugin,
+  Skill,
+  SkillText,
+  ToolList,
+  ToolSpec,
+  TraceStats,
+  UsageSummary,
   Settings,
   SettingsView,
   WorkspaceInfo,
@@ -24,7 +34,7 @@ export const api = {
   updateSettings: (patch: Partial<Settings>) => invoke<SettingsView>("update_settings", { patch }),
   setApiKey: (key: string) => invoke<SettingsView>("set_api_key", { key }),
   listModels: (provider?: Provider) => invoke<ModelInfo[]>("list_models", { provider: provider ?? null }),
-  setProviderKey: (provider: "anthropic" | "openrouter" | "local", key: string) => invoke<SettingsView>("set_provider_key", { provider, key }),
+  setProviderKey: (provider: Provider, key: string) => invoke<SettingsView>("set_provider_key", { provider, key }),
 
   // workspace
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
@@ -73,6 +83,42 @@ export const api = {
   agentRespond: (approvalId: string, decision: Decision, feedback?: string) =>
     invoke<void>("agent_respond", { approvalId, decision, feedback: feedback ?? null }),
   agentRunning: () => invoke<string[]>("agent_running"),
+
+  // usage & traces
+  usageSummary: (days = 30) => invoke<UsageSummary>("usage_summary", { days }),
+  clearUsage: () => invoke<void>("clear_usage"),
+  traceStats: () => invoke<TraceStats>("trace_stats"),
+  exportTraces: (path: string, localOnly: boolean) => invoke<number>("export_traces", { path, localOnly }),
+  clearTraces: () => invoke<void>("clear_traces"),
+
+  // skills
+  listSkills: () => invoke<Skill[]>("list_skills"),
+  readSkill: (path: string) => invoke<SkillText>("read_skill", { path }),
+  saveSkill: (scope: string, name: string, description: string, body: string) => invoke<string>("save_skill", { scope, name, description, body }),
+  deleteSkill: (path: string) => invoke<void>("delete_skill", { path }),
+
+  // custom tools
+  listCustomTools: () => invoke<ToolList>("list_custom_tools"),
+  saveCustomTool: (scope: string, spec: ToolSpec) => invoke<string>("save_custom_tool", { scope, spec }),
+  deleteCustomTool: (name: string) => invoke<void>("delete_custom_tool", { name }),
+
+  // MCP
+  mcpConfig: () => invoke<string>("mcp_config"),
+  saveMcpConfig: (raw: string) => invoke<void>("save_mcp_config", { raw }),
+  mcpStatus: (reconnect?: string) => invoke<McpServerStatus[]>("mcp_status", { reconnect: reconnect ?? null }),
+
+  // plugins & extensions
+  listPlugins: () => invoke<Plugin[]>("list_plugins"),
+  installPluginFolder: (path: string) => invoke<string>("install_plugin_folder", { path }),
+  installPluginGit: (url: string) => invoke<string>("install_plugin_git", { url }),
+  removePlugin: (id: string) => invoke<void>("remove_plugin", { id }),
+  setPluginEnabled: (id: string, enabled: boolean) => invoke<SettingsView>("set_plugin_enabled", { id, enabled }),
+  buildRustExtension: (path: string) => invoke<BuildResult>("build_rust_extension", { path }),
+
+  // browser
+  browserAction: (action: Record<string, unknown>) => invoke<BrowserOutcome>("browser_action", { action }),
+  browserRunning: () => invoke<boolean>("browser_running"),
+  openFolder: (path: string) => invoke<void>("open_folder", { path }),
 };
 
 /** Error text from a rejected invoke (Rust errors serialize as strings). */

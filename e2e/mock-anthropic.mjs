@@ -28,6 +28,9 @@ function script(body) {
     const r = last.toolResults[0];
     const content = typeof r.content === "string" ? r.content : JSON.stringify(r.content);
     if (r.is_error) return { blocks: [{ type: "text", text: `Understood — that didn't go through:\n\n> ${content.split("\n")[0]}\n\nTell me how you'd like to proceed.` }], stop: "end_turn" };
+    if (content.startsWith("Saved skill")) {
+      return { blocks: [{ type: "text", text: "Saved — I'll follow **release-steps** next time you ask for a release." }], stop: "end_turn" };
+    }
     if (content.startsWith("Exit code:")) {
       return {
         blocks: [{ type: "text", text: `The command finished. Here's the output:\n\n\`\`\`text\n${content.split("\n").slice(1).join("\n").trim()}\n\`\`\`\n\nEverything looks good.` }],
@@ -40,6 +43,20 @@ function script(body) {
     };
   }
   const t = (last.text ?? "").toLowerCase();
+  if (t.includes("skill")) {
+    return {
+      blocks: [
+        { type: "text", text: "I'll save that procedure as a skill." },
+        {
+          type: "tool_use",
+          id: "toolu_skill",
+          name: "skill_save",
+          input: { name: "release-steps", description: "How to cut a release of the demo project", content: "1. Bump the version in Cargo.toml\n2. Run cargo test\n3. Tag and push" },
+        },
+      ],
+      stop: "tool_use",
+    };
+  }
   if (t.includes("create")) {
     return {
       blocks: [

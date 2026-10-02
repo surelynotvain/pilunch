@@ -241,6 +241,15 @@ pub struct ToolResult {
     pub content: String,
     pub is_error: bool,
     pub ui: ToolUi,
+    /// Images returned to the model with the text (screenshots).
+    pub images: Vec<Image>,
+}
+
+/// A base64-encoded image for the model.
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub media_type: String,
+    pub data: String,
 }
 
 impl ToolResult {
@@ -250,6 +259,7 @@ impl ToolResult {
             ui: ToolUi { status: ToolStatus::Error, summary: summary.into(), detail: Some(msg.clone()), detail_kind: Some("text".into()), path: None },
             content: msg,
             is_error: true,
+            images: Vec::new(),
         }
     }
 
@@ -262,7 +272,19 @@ impl ToolResult {
             content: truncate_middle(&content, MAX_RESULT),
             is_error: false,
             ui: ToolUi { status: ToolStatus::Done, summary, detail, detail_kind, path },
+            images: Vec::new(),
         }
+    }
+
+    /// A successful result with plain-text output shown in the tool card.
+    pub fn done(content: String, summary: String, detail: Option<String>) -> Self {
+        let detail = detail.map(|d| (d, "output"));
+        Self::ok(content, summary, detail, None)
+    }
+
+    pub fn with_images(mut self, images: Vec<Image>) -> Self {
+        self.images = images;
+        self
     }
 }
 
@@ -667,11 +689,17 @@ fn kill_tree(child: &mut tokio::process::Child) {
 }
 
 /// Run a shell command; `on_output` receives live output (ANSI-stripped).
-pub async fn run_command(
+pub async fn run_command(command: &str, timeout_secs: Option<u64>, ws: &Workspace, cancel: &CancellationToken, on_output: impl FnMut(&str)) -> ToolResult {
+    run_command_env(command, timeout_secs, ws, cancel, &[], on_output).await
+}
+
+/// `run_command` with extra environment variables (custom tools pass their inputs this way).
+pub async fn run_command_env(
     command: &str,
     timeout_secs: Option<u64>,
     ws: &Workspace,
     cancel: &CancellationToken,
+    env: &[(String, String)],
     mut on_output: impl FnMut(&str),
 ) -> ToolResult {
     let timeout = Duration::from_secs(timeout_secs.unwrap_or(120).clamp(1, 600));
@@ -690,6 +718,7 @@ pub async fn run_command(
         .env("NO_COLOR", "1")
         .env("TERM", "dumb")
         .env("PILUNCH", "1")
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);

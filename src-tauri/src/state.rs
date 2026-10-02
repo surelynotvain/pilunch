@@ -1,6 +1,7 @@
 use crate::agent::AgentManager;
 use crate::conversations::ConversationStore;
 use crate::error::{Error, Result};
+use crate::records::Records;
 use crate::search::FileIndex;
 use crate::settings::SettingsStore;
 use crate::terminal::Terminals;
@@ -18,6 +19,9 @@ pub struct AppState {
     pub terminals: Terminals,
     pub agent: AgentManager,
     pub http: reqwest::Client,
+    pub records: Records,
+    pub mcp: crate::ext::mcp::McpManager,
+    pub browser: crate::browser::Browser,
 }
 
 impl AppState {
@@ -25,6 +29,9 @@ impl AppState {
         Self {
             settings: SettingsStore::load(config_dir),
             conversations: ConversationStore::load(data_dir.join("conversations")),
+            records: Records::new(data_dir.clone()),
+            mcp: Default::default(),
+            browser: Default::default(),
             workspace: RwLock::new(None),
             index: FileIndex::default(),
             watcher: Mutex::new(None),

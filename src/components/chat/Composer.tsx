@@ -4,8 +4,8 @@ import { useChat } from "../../store/chat";
 import { useApp } from "../../store/app";
 import { api } from "../../lib/ipc";
 import { basename, dirname } from "../../lib/util";
-import type { Effort, FileMatch, PermissionMode } from "../../lib/types";
-import { EFFORTS, MODELS, activeModel, modelPatch, providerReady } from "../../lib/models";
+import type { Effort, FileMatch, PermissionMode, ThinkingLevel } from "../../lib/types";
+import { EFFORTS, MODELS, THINKING_LEVELS, activeModel, modelPatch, providerReady } from "../../lib/models";
 
 const MODES: { id: PermissionMode; label: string; title: string }[] = [
   { id: "ask", label: "Ask before edits", title: "Claude asks before every file edit and command" },
@@ -43,6 +43,7 @@ export function Composer({ convId }: { convId: string | null }) {
   };
   const choices = provider === "anthropic" ? MODELS : (remote ?? []);
   const effort = useApp((s) => s.settings?.effort ?? "high");
+  const thinking = useApp((s) => s.settings?.thinkingLevel ?? "normal");
   const ta = useRef<HTMLTextAreaElement>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [matches, setMatches] = useState<FileMatch[]>([]);
@@ -244,18 +245,34 @@ export function Composer({ convId }: { convId: string | null }) {
               </option>
             ))}
           </select>
-          <select
-            className="pill-select"
-            value={effort}
-            title="Thinking effort"
-            onChange={(e) => void useApp.getState().updateSettings({ effort: e.target.value as Effort })}
-          >
-            {EFFORTS.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.label}
-              </option>
-            ))}
-          </select>
+          {provider === "local" ? (
+            <select
+              className="pill-select"
+              value={thinking}
+              title="Thinking level (XHigh and above force a minimum thinking budget)"
+              onChange={(e) => void useApp.getState().updateSettings({ thinkingLevel: e.target.value as ThinkingLevel })}
+              data-testid="thinking-select"
+            >
+              {THINKING_LEVELS.map((x) => (
+                <option key={x.id} value={x.id} title={x.hint}>
+                  Think: {x.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select
+              className="pill-select"
+              value={effort}
+              title="Thinking effort"
+              onChange={(e) => void useApp.getState().updateSettings({ effort: e.target.value as Effort })}
+            >
+              {EFFORTS.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.label}
+                </option>
+              ))}
+            </select>
+          )}
           {running ? (
             <button className="send-btn stop" title="Stop (Esc)" onClick={() => cancel(convId ?? undefined)} data-testid="stop-button">
               <Icon name="stop" size={14} />

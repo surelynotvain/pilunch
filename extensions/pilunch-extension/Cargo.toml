@@ -1,0 +1,9 @@
+[package]
+name = "pilunch-extension"
+version = "0.2.0"
+edition = "2021"
+description = "Write PiLunch agent extensions in Rust: a tiny MCP (stdio) server framework"
+license = "MIT"
+
+[dependencies]
+serde_json = "1"

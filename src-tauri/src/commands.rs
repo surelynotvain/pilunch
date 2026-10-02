@@ -51,8 +51,11 @@ pub async fn list_models(state: State<'_, AppState>, provider: Option<String>) -
     }
     let to_info = |v: Vec<(String, String)>| v.into_iter().map(|(id, display_name)| ModelInfo { id, display_name }).collect();
     match settings.provider.as_str() {
-        "openrouter" | "local" => {
-            let ep = agent::openai::Endpoint::for_settings(&settings, state.settings.openrouter_key(), state.settings.local_key()).expect("openai provider");
+        "openai" | "xai" | "google" | "openrouter" | "local" => {
+            let ep = agent::openai::Endpoint::for_settings(&settings, &state.settings).expect("openai provider");
+            if ep.key.is_none() && ep.flavor != agent::openai::Flavor::Local {
+                return Err(Error::msg("No API key configured"));
+            }
             let resp = ep
                 .request(&state.http, reqwest::Method::GET, "/models")
                 .timeout(std::time::Duration::from_secs(15))
@@ -65,7 +68,7 @@ pub async fn list_models(state: State<'_, AppState>, provider: Option<String>) -
                 return Err(Error::msg(format!("{status}: {}", agent::openai::error_message(&text))));
             }
             let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| Error::msg(format!("unexpected response: {e}")))?;
-            Ok(to_info(agent::openai::parse_models(&v)))
+            Ok(to_info(agent::openai::parse_models(&v, ep.flavor)))
         }
         _ => {
             let key = state.settings.api_key().ok_or_else(|| Error::msg("No API key configured"))?;

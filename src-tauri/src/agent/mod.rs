@@ -8,8 +8,11 @@
 pub mod api;
 pub mod openai;
 pub mod events;
+mod extras;
+pub use extras::browser_options;
 pub mod prompt;
 pub mod sse;
+pub mod thinking;
 pub mod toolbox;
 pub mod tools;
 
@@ -54,6 +57,9 @@ struct Grants {
     edits: bool,
     commands: bool,
     network: bool,
+    /// Custom tools and MCP tools.
+    tools: bool,
+    computer: bool,
 }
 
 type ApprovalReply = oneshot::Sender<(Decision, Option<String>)>;
@@ -137,6 +143,10 @@ struct Run<'a, R: Runtime> {
     ws: Option<Workspace>,
     conv: Conversation,
     cancel: CancellationToken,
+    /// The last request's system prompt and tools, for the training trace.
+    last_system: String,
+    last_tools: Vec<Value>,
+    extras: extras::Extras,
 }
 
 impl<'a, R: Runtime> Run<'a, R> {
@@ -156,8 +166,14 @@ impl<'a, R: Runtime> Run<'a, R> {
             "anthropic" if api_key.is_none() => {
                 return fail(sink, "No API key configured. Add your Anthropic API key in Settings (Ctrl+,), set ANTHROPIC_API_KEY, or switch to another provider.".into());
             }
-            "openrouter" if state.settings.openrouter_key().is_none() => {
-                return fail(sink, "No OpenRouter API key configured. Add it in Settings (Ctrl+,).".into());
+            p @ ("openai" | "xai" | "google" | "openrouter") if state.settings.provider_key(p).is_none() => {
+                let name = match p {
+                    "openai" => "OpenAI",
+                    "xai" => "xAI",
+                    "google" => "Google AI Studio",
+                    _ => "OpenRouter",
+                };
+                return fail(sink, format!("No {name} API key configured. Add it in Settings (Ctrl+,)."));
             }
             "local" if settings.local_model.trim().is_empty() => {
                 return fail(sink, "Pick a local model in Settings (Ctrl+,) — make sure your local server (e.g. Ollama) is running.".into());
@@ -168,8 +184,45 @@ impl<'a, R: Runtime> Run<'a, R> {
             Ok(ws) => ws,
             Err(e) => return fail(sink, format!("The folder for this chat is unavailable: {e}")),
         };
-        let mut run = Run { app, state, settings, api_key, ws, conv, cancel };
-        run.loop_(req, sink).await
+        let extras = extras::Extras::empty(state.settings.config_dir());
+        let mut run = Run { app, state, settings, api_key, ws, conv, cancel, last_system: String::new(), last_tools: Vec::new(), extras };
+        let stop = run.loop_(req, sink).await;
+        run.save_trace(&stop);
+        stop
+    }
+
+    /// Write the conversation as a training trace, if the user turned traces on.
+    fn save_trace(&self, stop: &str) {
+        let s = &self.settings;
+        if !s.save_traces || (s.traces_scope == "local" && s.provider != "local") || self.conv.messages.is_empty() {
+            return;
+        }
+        let model = self.conv.messages.iter().rev().find_map(|m| m.model.clone()).unwrap_or_else(|| self.model_id());
+        let meta = crate::records::TraceMeta {
+            provider: &s.provider,
+            model: &model,
+            thinking_level: if s.provider == "local" { &s.thinking_level } else { "" },
+            effort: &s.effort,
+            system: &self.last_system,
+            tools: &self.last_tools,
+            stop_reason: stop,
+        };
+        if let Err(e) = self.state.records.save_trace(&self.conv, &meta) {
+            eprintln!("failed to save trace: {e}");
+        }
+    }
+
+    /// The configured model id for the selected provider.
+    fn model_id(&self) -> String {
+        let s = &self.settings;
+        match s.provider.as_str() {
+            "openai" => s.openai_model.clone(),
+            "xai" => s.xai_model.clone(),
+            "google" => s.google_model.clone(),
+            "openrouter" => s.openrouter_model.clone(),
+            "local" => s.local_model.clone(),
+            _ => s.model.clone(),
+        }
     }
 
     fn save(&mut self) {
@@ -204,8 +257,11 @@ impl<'a, R: Runtime> Run<'a, R> {
             },
         );
 
-        let endpoint = openai::Endpoint::for_settings(&self.settings, self.state.settings.openrouter_key(), self.state.settings.local_key());
-        let system = prompt::system_prompt(self.ws.as_ref(), self.state.settings.permission_mode(), &self.settings.custom_instructions);
+        let endpoint = openai::Endpoint::for_settings(&self.settings, &self.state.settings);
+        let root = self.ws.as_ref().map(|w| w.root().to_path_buf());
+        self.extras = extras::load(self.state, &self.settings, root.as_deref(), sink).await;
+        let mut system = prompt::system_prompt(self.ws.as_ref(), self.state.settings.permission_mode(), &self.settings.custom_instructions);
+        system.push_str(&self.extras.prompt);
         let eager = self.settings.is_default_endpoint() && endpoint.is_none();
         let mut truncations = 0;
 
@@ -215,41 +271,74 @@ impl<'a, R: Runtime> Run<'a, R> {
             }
             let mode = self.state.settings.permission_mode();
             let web_search = endpoint.is_none() && self.settings.web_search && self.settings.is_default_endpoint() && api::ModelCaps::of(&self.settings.model).adaptive;
-            let tools = if self.ws.is_some() {
+            let mut tools = if self.ws.is_some() {
                 tools::definitions(&tools::ToolOptions { mode, eager, web_search })
             } else if web_search {
                 vec![toolbox::web_search_def()]
             } else {
                 Vec::new()
             };
-            let req = match &endpoint {
-                Some(ep) => Req {
-                    body: openai::build_request(&self.settings, ep, &system, &tools, &self.conv.api_messages()),
-                    betas: Vec::new(),
-                    openai: Some(ep.clone()),
-                },
-                None => {
-                    let (body, betas) = api::build_request(RequestParts { settings: &self.settings, system: &system, tools, messages: self.conv.api_messages() });
-                    Req { body, betas, openai: None }
+            tools.extend(self.extras.definitions(mode));
+            // Local models at XHigh and above must think for a minimum budget (budget forcing).
+            let forcing = endpoint
+                .as_ref()
+                .filter(|e| e.flavor == openai::Flavor::Local)
+                .map(|_| thinking::level(&self.settings.thinking_level))
+                .filter(|l| l.min_tokens > 0);
+            let mut forced = String::new();
+            let mut rounds = 0;
+            let turn = loop {
+                let mut messages = self.conv.api_messages();
+                if !forced.is_empty() {
+                    let budget = forcing.map_or(0, |l| l.min_tokens);
+                    let nudge = thinking::nudge(&forced, thinking::estimate_tokens(&forced), budget);
+                    messages.push(json!({ "role": "user", "content": [{ "type": "text", "text": nudge }] }));
                 }
-            };
-
-            let turn = match self.stream_with_retries(&req, sink).await {
-                Ok(t) => t,
-                Err(StreamFail::Cancelled(partial)) => {
-                    sink.send(AgentEvent::Reset);
-                    if !partial.is_empty() {
-                        self.append(sink, assistant_message(partial, None));
+                self.last_system.clone_from(&system);
+                self.last_tools.clone_from(&tools);
+                let req = match &endpoint {
+                    Some(ep) => Req { body: openai::build_request(&self.settings, ep, &system, &tools, &messages), betas: Vec::new(), openai: Some(ep.clone()) },
+                    None => {
+                        let (body, betas) = api::build_request(RequestParts { settings: &self.settings, system: &system, tools: tools.clone(), messages });
+                        Req { body, betas, openai: None }
                     }
-                    return "cancelled".into();
+                };
+                let mut turn = match self.stream_with_retries(&req, sink).await {
+                    Ok(t) => t,
+                    Err(StreamFail::Cancelled(partial)) => {
+                        sink.send(AgentEvent::Reset);
+                        if !partial.is_empty() {
+                            self.append(sink, assistant_message(partial, None));
+                        }
+                        return "cancelled".into();
+                    }
+                    Err(StreamFail::Api(e)) => {
+                        sink.send(AgentEvent::Reset);
+                        sink.send(AgentEvent::Error { message: e.user_message() });
+                        return "error".into();
+                    }
+                };
+                self.record_usage(&turn, sink);
+                if let Some(lv) = forcing {
+                    let thought = turn_thinking(&turn);
+                    let spent = thinking::estimate_tokens(&forced) + thinking::estimate_tokens(&thought);
+                    // A round with no visible reasoning means the model doesn't expose it: stop forcing.
+                    if spent < lv.min_tokens && rounds < lv.max_rounds && !thought.is_empty() && turn.stop_reason.as_deref() != Some("max_tokens") {
+                        rounds += 1;
+                        if !forced.is_empty() {
+                            forced.push_str("\n\n");
+                        }
+                        forced.push_str(&thought);
+                        sink.send(AgentEvent::Reset);
+                        sink.send(AgentEvent::Notice { message: format!("Thinking longer: {spent} of {} thinking tokens (round {rounds} of {})", lv.min_tokens, lv.max_rounds) });
+                        continue;
+                    }
                 }
-                Err(StreamFail::Api(e)) => {
-                    sink.send(AgentEvent::Reset);
-                    sink.send(AgentEvent::Error { message: e.user_message() });
-                    return "error".into();
+                if !forced.is_empty() {
+                    merge_thinking(&mut turn.content, &forced);
                 }
+                break turn;
             };
-            self.record_usage(&turn, sink);
 
             if turn.stop_reason.as_deref() == Some("refusal") {
                 // The partial output of a declined request is discarded, not kept as an answer.
@@ -347,6 +436,17 @@ impl<'a, R: Runtime> Run<'a, R> {
         t.output_tokens += output;
         t.cache_read_tokens += cr;
         t.cache_write_tokens += cw;
+        self.state.records.record_usage(&crate::records::UsageEntry {
+            ts: now_ms(),
+            provider: self.settings.provider.clone(),
+            model: if turn.model.is_empty() { self.model_id() } else { turn.model.clone() },
+            conversation: self.conv.meta.id.clone(),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cr,
+            cache_write_tokens: cw,
+        });
+        let t = &self.conv.usage;
         sink.send(AgentEvent::Usage { totals: t.clone(), context_tokens: input + cr + cw + output });
     }
 
@@ -383,20 +483,31 @@ impl<'a, R: Runtime> Run<'a, R> {
         match &req.openai {
             None => api::open_stream(&self.state.http, &self.settings.api_base(), self.api_key.as_deref().unwrap_or_default(), &req.body, &req.betas).await,
             Some(ep) => {
-                let resp = ep
-                    .request(&self.state.http, reqwest::Method::POST, "/chat/completions")
-                    .header("accept", "text/event-stream")
-                    .json(&req.body)
-                    .send()
-                    .await
-                    .map_err(|e| ApiError::Network(format!("{} (is the server at {} running?)", api::describe_reqwest(&e), ep.base)))?;
-                if resp.status().is_success() {
-                    return Ok(resp);
+                let mut body = std::borrow::Cow::Borrowed(&req.body);
+                loop {
+                    let resp = ep
+                        .request(&self.state.http, reqwest::Method::POST, "/chat/completions")
+                        .header("accept", "text/event-stream")
+                        .json(&*body)
+                        .send()
+                        .await
+                        .map_err(|e| ApiError::Network(format!("{} (is the server at {} running?)", api::describe_reqwest(&e), ep.base)))?;
+                    if resp.status().is_success() {
+                        return Ok(resp);
+                    }
+                    let status = resp.status().as_u16();
+                    let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).map(Duration::from_secs);
+                    let message = openai::error_message(&resp.text().await.unwrap_or_default());
+                    // Some models/servers reject reasoning parameters: retry once without them.
+                    if matches!(body, std::borrow::Cow::Borrowed(_)) && openai::rejects_reasoning(status, &message) {
+                        let mut b = req.body.clone();
+                        if openai::strip_reasoning(&mut b) {
+                            body = std::borrow::Cow::Owned(b);
+                            continue;
+                        }
+                    }
+                    return Err(ApiError::Http { status, kind: String::new(), message, retry_after });
                 }
-                let status = resp.status().as_u16();
-                let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).map(Duration::from_secs);
-                let text = resp.text().await.unwrap_or_default();
-                Err(ApiError::Http { status, kind: String::new(), message: openai::error_message(&text), retry_after })
             }
         }
     }
@@ -524,13 +635,16 @@ impl<'a, R: Runtime> Run<'a, R> {
             }
             self.set_tool_ui(sink, &id, ToolUi { status: ToolStatus::Running, summary: summary.clone(), detail: None, detail_kind: None, path: None });
             let res = self.run_tool(&id, &name, &input, sink).await;
-            results.push(tool_result(&id, &res.content, res.is_error));
+            results.push(tool_result_with_images(&id, &res));
             self.set_tool_ui(sink, &id, res.ui);
         }
         results
     }
 
     async fn run_tool(&mut self, id: &str, name: &str, input: &Value, sink: &mut Sink) -> tools::ToolResult {
+        if let Some(r) = self.run_ext(id, name, input, sink).await {
+            return r;
+        }
         let summary = tools::describe(name, input);
         let mode = self.state.settings.permission_mode();
         let grants = self.state.agent.grants(&self.conv.meta.id);
@@ -666,6 +780,22 @@ impl<'a, R: Runtime> Run<'a, R> {
     }
 }
 
+/// All thinking text in a turn.
+fn turn_thinking(turn: &AssistantTurn) -> String {
+    turn.content.iter().filter(|b| b["type"] == "thinking").filter_map(|b| b["thinking"].as_str()).collect::<Vec<_>>().join("\n\n")
+}
+
+/// Put reasoning from earlier forced rounds in front of the final turn's own thinking.
+fn merge_thinking(content: &mut Vec<Value>, earlier: &str) {
+    match content.iter_mut().find(|b| b["type"] == "thinking") {
+        Some(b) => {
+            let own = b["thinking"].as_str().unwrap_or_default().to_string();
+            b["thinking"] = json!(format!("{earlier}\n\n{own}"));
+        }
+        None => content.insert(0, json!({ "type": "thinking", "thinking": earlier })),
+    }
+}
+
 /// The request for one model turn.
 struct Req {
     body: Value,
@@ -686,6 +816,19 @@ fn tool_result(id: &str, content: &str, is_error: bool) -> Value {
     let mut v = json!({ "type": "tool_result", "tool_use_id": id, "content": content });
     if is_error {
         v["is_error"] = json!(true);
+    }
+    v
+}
+
+/// A tool result carrying images: content becomes text + image blocks.
+fn tool_result_with_images(id: &str, res: &tools::ToolResult) -> Value {
+    let mut v = tool_result(id, &res.content, res.is_error);
+    if !res.images.is_empty() {
+        let mut blocks = vec![json!({ "type": "text", "text": res.content })];
+        for img in &res.images {
+            blocks.push(json!({ "type": "image", "source": { "type": "base64", "media_type": img.media_type, "data": img.data } }));
+        }
+        v["content"] = Value::Array(blocks);
     }
     v
 }

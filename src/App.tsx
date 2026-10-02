@@ -14,6 +14,8 @@ import { ContextMenuHost } from "./components/ContextMenu";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { TitleBar } from "./components/TitleBar";
 import { Onboarding } from "./components/Onboarding";
+import { Customize } from "./components/customize/Customize";
+import { BrowserPanel } from "./components/BrowserPanel";
 import { commandForEvent } from "./commands";
 import { useApp, type SidebarView } from "./store/app";
 import { useChat } from "./store/chat";
@@ -67,6 +69,17 @@ function SidebarShell({ children }: { children: React.ReactNode }) {
           data-testid="activity-terminal"
         >
           <Icon name="terminal" size={16} />
+        </button>
+        <button
+          className={`icon-btn${layout.browserVisible ? " active" : ""}`}
+          title="Browser"
+          onClick={() => useApp.getState().setLayout({ browserVisible: !layout.browserVisible })}
+          data-testid="activity-browser"
+        >
+          <Icon name="globe" size={16} />
+        </button>
+        <button className="icon-btn" title="Customize: skills, tools, MCP, plugins, usage" onClick={() => useApp.getState().openHub(useApp.getState().hubTab)} data-testid="activity-customize">
+          <Icon name="puzzle" size={16} />
         </button>
         <button className="icon-btn" title="Settings (Ctrl+,)" onClick={() => useApp.getState().setOverlay("settings")} data-testid="activity-settings">
           <Icon name="settings" size={16} />
@@ -160,7 +173,9 @@ export function App() {
 
   if (!ready) return <div className="app" />;
 
-  const showEditor = hasTabs && !layout.chatFocus;
+  const showBrowser = layout.browserVisible;
+  const showEditor = hasTabs && !layout.chatFocus && !showBrowser;
+  const dockChat = showEditor || showBrowser;
   const setLayout = useApp.getState().setLayout;
 
   return (
@@ -182,7 +197,9 @@ export function App() {
           </>
         )}
         <div className="center">
-          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}><ErrorBoundary label={showEditor ? "Editor" : "Chat"}>{showEditor ? <EditorArea /> : <ChatPanel docked={false} />}</ErrorBoundary></div>
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}><ErrorBoundary label={showBrowser ? "Browser" : showEditor ? "Editor" : "Chat"}>
+              {showBrowser ? <BrowserPanel /> : showEditor ? <EditorArea /> : <ChatPanel docked={false} />}
+            </ErrorBoundary></div>
           {terminalMounted && (
             <div style={{ display: layout.terminalVisible ? "flex" : "none", flexDirection: "column" }}>
               <Splitter
@@ -196,7 +213,7 @@ export function App() {
             </div>
           )}
         </div>
-        {showEditor && (
+        {dockChat && (
           <>
             <Splitter
               dir="v"
@@ -214,6 +231,7 @@ export function App() {
       <StatusBar />
       {needsSetup && <Onboarding />}
       {overlay === "settings" && <SettingsModal />}
+      {overlay === "customize" && <Customize />}
       {(overlay === "quickOpen" || overlay === "commands") && <Palette key={overlay} mode={overlay} />}
       <ContextMenuHost />
       <Toasts />

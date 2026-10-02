@@ -24,9 +24,22 @@ export interface Settings {
   openrouterModel: string;
   localBaseUrl: string;
   localModel: string;
+  openaiModel: string;
+  xaiModel: string;
+  googleModel: string;
+  thinkingLevel: ThinkingLevel;
+  saveTraces: boolean;
+  tracesScope: "all" | "local";
+  computerUse: boolean;
+  browserUse: boolean;
+  browserHeadless: boolean;
+  geckodriverPath: string;
+  firefoxPath: string;
+  disabledPlugins: string[];
 }
 
-export type Provider = "anthropic" | "openrouter" | "local";
+export type Provider = "anthropic" | "openai" | "xai" | "google" | "openrouter" | "local";
+export type ThinkingLevel = "off" | "low" | "normal" | "medium" | "high" | "xhigh" | "ultra" | "max";
 
 export interface SettingsView extends Settings {
   hasApiKey: boolean;
@@ -34,6 +47,7 @@ export interface SettingsView extends Settings {
   apiKeyHint: string | null;
   hasOpenrouterKey: boolean;
   hasLocalKey: boolean;
+  providerKeys: Partial<Record<Provider, boolean>>;
   configDir: string;
 }
 
@@ -145,7 +159,7 @@ export interface ToolUi {
   status: ToolStatus;
   summary: string;
   detail?: string;
-  detailKind?: "diff" | "output" | "text";
+  detailKind?: "diff" | "output" | "text" | "image";
   path?: string;
 }
 
@@ -174,7 +188,7 @@ export type AgentEvent =
   | { type: "toolInput"; index: number; toolId: string; name: string; input: Record<string, unknown>; summary: string }
   | { type: "toolStatus"; toolId: string; ui: ToolUi }
   | { type: "toolOutput"; toolId: string; text: string }
-  | { type: "approvalRequest"; approvalId: string; toolId: string; kind: "edit" | "command" | "network"; title: string; detail: string }
+  | { type: "approvalRequest"; approvalId: string; toolId: string; kind: "edit" | "command" | "network" | "tool" | "computer"; title: string; detail: string }
   | { type: "approvalResolved"; approvalId: string; toolId: string }
   | { type: "usage"; totals: UsageTotals; contextTokens: number }
   | { type: "retrying"; attempt: number; delayMs: number; message: string }
@@ -183,3 +197,100 @@ export type AgentEvent =
   | { type: "refusal"; message: string }
   | { type: "error"; message: string }
   | { type: "done"; stopReason: string };
+
+// ---- usage & traces ----------------------------------------------------------------
+
+export interface UsageRow {
+  key: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface UsageSummary {
+  total: UsageRow;
+  today: UsageRow;
+  byDay: UsageRow[];
+  byModel: UsageRow[];
+  byProvider: UsageRow[];
+  conversations: number;
+}
+
+export interface TraceStats {
+  dir: string;
+  count: number;
+  bytes: number;
+}
+
+// ---- extensions --------------------------------------------------------------------
+
+export interface Skill {
+  name: string;
+  description: string;
+  scope: string;
+  path: string;
+}
+
+export interface SkillText {
+  name: string;
+  description: string;
+  body: string;
+}
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  command: string;
+  timeout?: number | null;
+}
+
+export interface CustomTool extends ToolSpec {
+  scope: string;
+  path: string;
+}
+
+export interface ToolList {
+  tools: CustomTool[];
+  errors: string[];
+  userDir: string;
+}
+
+export interface McpServerStatus {
+  name: string;
+  state: "connected" | "error" | "disabled";
+  transport: string;
+  source: string;
+  tools: string[];
+  error: string | null;
+}
+
+export interface Plugin {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  path: string;
+  enabled: boolean;
+  kind: "plugin" | "rust-extension";
+  skills: number;
+  tools: number;
+  servers: string[];
+  error: string | null;
+}
+
+export interface BuildResult {
+  ok: boolean;
+  id: string | null;
+  log: string;
+  error: string | null;
+}
+
+export interface BrowserOutcome {
+  url: string;
+  title: string;
+  text: string;
+  screenshot: string | null;
+}

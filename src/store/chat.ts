@@ -18,7 +18,7 @@ export interface DraftBlock {
 export interface Approval {
   approvalId: string;
   toolId: string;
-  kind: "edit" | "command" | "network";
+  kind: "edit" | "command" | "network" | "tool" | "computer";
   title: string;
   detail: string;
 }

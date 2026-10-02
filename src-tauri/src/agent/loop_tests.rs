@@ -423,3 +423,119 @@ fn local_openai_compatible_provider_runs_tools() {
     assert_eq!(conv.tool_ui["call_a"].status, ToolStatus::Done);
     assert!(conv.api_messages().iter().all(|m| m["content"].as_array().unwrap().iter().all(|b| b["type"] != "thinking")));
 }
+
+#[test]
+fn max_thinking_level_forces_more_reasoning() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let short = |r: &str, answer: &str| {
+        MockResp::Sse(oa_sse(&[
+            json!({"model":"qwen3","choices":[{"delta":{"reasoning_content":r}}]}),
+            json!({"choices":[{"delta":{"content":answer},"finish_reason":"stop"}]}),
+        ]))
+    };
+    let long = "x".repeat(4 * 2_100);
+    let (addr, recorded) = rt.block_on(mock_api(vec![short("first idea", "too quick"), short(&long, "Final answer.")]));
+    let h = harness("http://unused", "ask");
+    h.app
+        .state::<AppState>()
+        .settings
+        .update(json!({"provider":"local","localBaseUrl": format!("{addr}/v1"),"localModel":"qwen3","thinkingLevel":"xhigh"}))
+        .unwrap();
+    let events = run_message(&h, "think hard", |_| unreachable!());
+    assert_eq!(events.last().unwrap()["stopReason"], "end_turn", "{events:?}");
+    let reqs = recorded.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 2, "one forced extra round");
+    assert_eq!(reqs[0].body["reasoning_effort"], "high");
+    let nudge = reqs[1].body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().to_string();
+    assert!(nudge.contains("first idea") && nudge.contains("Wait"), "{nudge}");
+    let conv = h.app.state::<AppState>().conversations.get(&h.conv_id).unwrap();
+    let last = conv.messages.last().unwrap();
+    assert_eq!(last.content[0]["type"], "thinking");
+    assert!(last.content[0]["thinking"].as_str().unwrap().starts_with("first idea"));
+    assert_eq!(last.content[1]["text"], "Final answer.");
+    // the discarded first answer is not in the history
+    assert!(!serde_json::to_string(&conv.messages).unwrap().contains("too quick"));
+    assert!(events.iter().any(|e| e["type"] == "notice" && e["message"].as_str().unwrap().contains("Thinking longer")));
+}
+
+#[test]
+fn rejected_reasoning_params_are_dropped_and_retried() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (addr, recorded) = rt.block_on(mock_api(vec![
+        MockResp::Status(400, r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#.into()),
+        MockResp::Sse(oa_sse(&[json!({"model":"m","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]})])),
+    ]));
+    let h = harness("http://unused", "ask");
+    h.app.state::<AppState>().settings.update(json!({"provider":"local","localBaseUrl": format!("{addr}/v1"),"localModel":"m","thinkingLevel":"high"})).unwrap();
+    let events = run_message(&h, "hello", |_| unreachable!());
+    assert_eq!(events.last().unwrap()["stopReason"], "end_turn", "{events:?}");
+    let reqs = recorded.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[0].body["reasoning_effort"], "high");
+    assert!(reqs[1].body.get("reasoning_effort").is_none());
+    assert!(reqs[1].body.get("chat_template_kwargs").is_none());
+}
+
+#[test]
+fn runs_record_usage_and_save_traces() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (addr, _rec) = rt.block_on(mock_api(vec![MockResp::Sse(oa_sse(&[
+        json!({"model":"qwen3","choices":[{"delta":{"reasoning_content":"hmm"}}]}),
+        json!({"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3}}),
+    ]))]));
+    let h = harness("http://unused", "ask");
+    let state = h.app.state::<AppState>();
+    state.settings.update(json!({"provider":"local","localBaseUrl": format!("{addr}/v1"),"localModel":"qwen3","saveTraces":true,"tracesScope":"local"})).unwrap();
+    run_message(&h, "hi", |_| unreachable!());
+    let usage = state.records.usage_entries();
+    assert_eq!(usage.len(), 1);
+    assert_eq!((usage[0].provider.as_str(), usage[0].model.as_str(), usage[0].input_tokens), ("local", "qwen3", 12));
+    let trace: Value = serde_json::from_slice(&std::fs::read(state.records.traces_dir().join(format!("{}.json", h.conv_id))).unwrap()).unwrap();
+    assert_eq!(trace["provider"], "local");
+    let msgs = trace["messages"].as_array().unwrap();
+    assert_eq!(msgs[0]["role"], "system");
+    assert_eq!(msgs.last().unwrap()["reasoning_content"], "hmm");
+    assert_eq!(msgs.last().unwrap()["content"], "hello");
+}
+
+#[test]
+fn agent_saves_and_loads_skills_and_runs_custom_tools() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let save = r#"{"name":"greet-steps","description":"How to greet","content":"1. Say hi"}"#;
+    let (addr, recorded) = rt.block_on(mock_api(vec![
+        MockResp::Sse(sse(&tool_turn("skill_save", &[save]))),
+        MockResp::Sse(sse(&tool_turn("hello_tool", &[r#"{"who":"Ada"}"#]))),
+        MockResp::Sse(sse(&text_turn("All done.", "end_turn"))),
+    ]));
+    let h = harness(&addr, "ask");
+    let state = h.app.state::<AppState>();
+    let cfg = state.settings.config_dir().to_path_buf();
+    std::fs::create_dir_all(cfg.join("tools")).unwrap();
+    std::fs::write(cfg.join("tools/hello.json"), r#"{"name":"hello_tool","description":"Greets","parameters":{"type":"object","properties":{"who":{"type":"string"}}},"command":"echo hello {{who}} $PILUNCH_ARG_WHO"}"#).unwrap();
+    let kinds = Arc::new(Mutex::new(Vec::new()));
+    let k2 = kinds.clone();
+    let events = run_message(&h, "learn and greet", move |a| {
+        k2.lock().unwrap().push((a["kind"].as_str().unwrap().to_string(), a["detail"].as_str().unwrap().to_string()));
+        (Decision::Allow, None)
+    });
+    assert_eq!(events.last().unwrap()["stopReason"], "end_turn", "{events:?}");
+    let kinds = kinds.lock().unwrap().clone();
+    assert_eq!(kinds[0].0, "edit");
+    assert!(kinds[0].1.contains("+1. Say hi"), "{}", kinds[0].1);
+    assert_eq!(kinds[1], ("command".to_string(), "echo hello 'Ada' $PILUNCH_ARG_WHO".to_string()));
+    let skill = std::fs::read_to_string(cfg.join("skills/greet-steps/SKILL.md")).unwrap();
+    assert!(skill.starts_with("---\nname: greet-steps\ndescription: How to greet\n---"));
+    let reqs = recorded.lock().unwrap().clone();
+    let names: Vec<&str> = reqs[0].body["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    assert!(names.contains(&"skill_load") && names.contains(&"hello_tool") && names.contains(&"browser"), "{names:?}");
+    assert!(!names.contains(&"computer"), "computer use is off by default");
+    let last = reqs[2].body["messages"].as_array().unwrap().last().unwrap().clone();
+    assert!(last["content"][0]["content"].as_str().unwrap().contains("hello Ada Ada"), "{last}");
+
+    // the next run lists the new skill in the system prompt
+    let (addr2, rec2) = rt.block_on(mock_api(vec![MockResp::Sse(sse(&text_turn("ok", "end_turn")))]));
+    state.settings.update(json!({ "baseUrl": addr2 })).unwrap();
+    run_message(&h, "again", |_| unreachable!());
+    let sys = rec2.lock().unwrap()[0].body["system"].to_string();
+    assert!(sys.contains("- greet-steps: How to greet"), "{sys}");
+}

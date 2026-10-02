@@ -1,5 +1,5 @@
-//! OpenAI-compatible providers: OpenRouter and local servers (Ollama, LM Studio, vLLM,
-//! llama.cpp…). Requests are built from the same Messages-API history the rest of the app
+//! OpenAI-compatible providers: OpenAI, xAI (Grok), Google (Gemini), OpenRouter and local
+//! servers (Ollama, LM Studio, vLLM, llama.cpp…). Requests are built from the same Messages-API history the rest of the app
 //! uses, and streamed chunks are translated into Messages-API stream events, so the agent
 //! loop, tools, approvals and UI work unchanged.
 
@@ -10,26 +10,36 @@ use std::collections::BTreeMap;
 
 pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 
+/// Which OpenAI-compatible service an endpoint talks to (they differ in small ways).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flavor {
+    OpenAi,
+    Xai,
+    Google,
+    OpenRouter,
+    Local,
+}
+
 #[derive(Clone, Debug)]
 pub struct Endpoint {
     pub base: String,
     pub key: Option<String>,
     pub model: String,
-    pub openrouter: bool,
+    pub flavor: Flavor,
 }
 
 impl Endpoint {
-    pub fn for_settings(s: &Settings, openrouter_key: Option<String>, local_key: Option<String>) -> Option<Self> {
-        match s.provider.as_str() {
-            "openrouter" => Some(Endpoint { base: OPENROUTER_BASE.into(), key: openrouter_key, model: s.openrouter_model.clone(), openrouter: true }),
-            "local" => Some(Endpoint {
-                base: s.local_base_url.trim().trim_end_matches('/').to_string(),
-                key: local_key,
-                model: s.local_model.clone(),
-                openrouter: false,
-            }),
-            _ => None,
-        }
+    /// The endpoint for the selected provider; `None` for Anthropic (native API).
+    pub fn for_settings(s: &Settings, store: &crate::settings::SettingsStore) -> Option<Self> {
+        let (flavor, base, model) = match s.provider.as_str() {
+            "openai" => (Flavor::OpenAi, "https://api.openai.com/v1".to_string(), &s.openai_model),
+            "xai" => (Flavor::Xai, "https://api.x.ai/v1".to_string(), &s.xai_model),
+            "google" => (Flavor::Google, "https://generativelanguage.googleapis.com/v1beta/openai".to_string(), &s.google_model),
+            "openrouter" => (Flavor::OpenRouter, OPENROUTER_BASE.to_string(), &s.openrouter_model),
+            "local" => (Flavor::Local, s.local_base_url.trim().trim_end_matches('/').to_string(), &s.local_model),
+            _ => return None,
+        };
+        Some(Endpoint { base, key: store.provider_key(&s.provider), model: model.clone(), flavor })
     }
 
     pub fn request(&self, http: &reqwest::Client, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -37,7 +47,7 @@ impl Endpoint {
         if let Some(k) = &self.key {
             r = r.bearer_auth(k);
         }
-        if self.openrouter {
+        if self.flavor == Flavor::OpenRouter {
             r = r.header("HTTP-Referer", "https://github.com/surelynotvain/pilunch").header("X-Title", "PiLunch");
         }
         r
@@ -46,6 +56,16 @@ impl Endpoint {
 
 /// Messages-API history → chat-completions messages.
 pub fn convert_messages(system: &str, messages: &[Value]) -> Vec<Value> {
+    convert(system, messages, false)
+}
+
+/// Like `convert_messages`, but keeps each assistant turn's thinking as `reasoning_content`
+/// (the format fine-tuning tools for reasoning models expect).
+pub fn convert_messages_with_reasoning(system: &str, messages: &[Value]) -> Vec<Value> {
+    convert(system, messages, true)
+}
+
+fn convert(system: &str, messages: &[Value], reasoning: bool) -> Vec<Value> {
     let mut out = vec![json!({ "role": "system", "content": system })];
     for m in messages {
         let role = m["role"].as_str().unwrap_or("user");
@@ -67,24 +87,42 @@ pub fn convert_messages(system: &str, messages: &[Value]) -> Vec<Value> {
                     })
                 })
                 .collect();
-            if text.is_empty() && calls.is_empty() {
+            let thought: Vec<&str> = if reasoning { blocks.iter().filter(|b| b["type"] == "thinking").filter_map(|b| b["thinking"].as_str()).collect() } else { Vec::new() };
+            if text.is_empty() && calls.is_empty() && thought.is_empty() {
                 continue;
             }
             let mut msg = json!({ "role": "assistant", "content": if text.is_empty() { Value::Null } else { json!(text.join("\n\n")) } });
+            if !thought.is_empty() {
+                msg["reasoning_content"] = json!(thought.join("\n\n"));
+            }
             if !calls.is_empty() {
                 msg["tool_calls"] = Value::Array(calls);
             }
             out.push(msg);
         } else {
+            // Tool messages can't hold images: they follow in a user message.
+            let mut images = Vec::new();
             for b in blocks.iter().filter(|b| b["type"] == "tool_result") {
                 let content = match &b["content"] {
                     Value::String(s) => s.clone(),
+                    Value::Array(parts) => {
+                        images.extend(parts.iter().filter(|p| p["type"] == "image").cloned());
+                        parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n")
+                    }
                     other => other.to_string(),
                 };
                 out.push(json!({ "role": "tool", "tool_call_id": b["tool_use_id"], "content": content }));
             }
+            images.extend(blocks.iter().filter(|b| b["type"] == "image").cloned());
             let text: Vec<&str> = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect();
-            if !text.is_empty() {
+            if !images.is_empty() {
+                let mut parts = vec![json!({ "type": "text", "text": if text.is_empty() { "Screenshot from the tool call above.".to_string() } else { text.join("\n\n") } })];
+                for img in images {
+                    let url = format!("data:{};base64,{}", img["source"]["media_type"].as_str().unwrap_or("image/png"), img["source"]["data"].as_str().unwrap_or_default());
+                    parts.push(json!({ "type": "image_url", "image_url": { "url": url } }));
+                }
+                out.push(json!({ "role": "user", "content": parts }));
+            } else if !text.is_empty() {
                 out.push(json!({ "role": "user", "content": text.join("\n\n") }));
             }
         }
@@ -106,9 +144,11 @@ pub fn build_request(s: &Settings, ep: &Endpoint, system: &str, tools: &[Value],
         "model": ep.model,
         "stream": true,
         "stream_options": { "include_usage": true },
-        "max_tokens": s.max_tokens,
         "messages": convert_messages(system, messages),
     });
+    // OpenAI's reasoning models only accept max_completion_tokens.
+    let max_key = if ep.flavor == Flavor::OpenAi { "max_completion_tokens" } else { "max_tokens" };
+    body[max_key] = json!(s.max_tokens);
     let fns = convert_tools(tools);
     if !fns.is_empty() {
         body["tools"] = Value::Array(fns);
@@ -119,12 +159,32 @@ pub fn build_request(s: &Settings, ep: &Endpoint, system: &str, tools: &[Value],
         "medium" => "medium",
         _ => "high",
     };
-    if ep.openrouter {
-        body["reasoning"] = json!({ "effort": effort });
-    } else {
-        body["reasoning_effort"] = json!(effort);
+    match ep.flavor {
+        Flavor::OpenRouter => body["reasoning"] = json!({ "effort": effort }),
+        Flavor::OpenAi | Flavor::Google => body["reasoning_effort"] = json!(effort),
+        // Only Grok's mini models take reasoning_effort; the others reject it.
+        Flavor::Xai if ep.model.contains("mini") => body["reasoning_effort"] = json!(effort),
+        Flavor::Xai => {}
+        Flavor::Local => super::thinking::apply(&mut body, super::thinking::level(&s.thinking_level)),
     }
     body
+}
+
+/// Drop the reasoning knobs from a request (for servers or models that reject them).
+/// Returns false if there was nothing to drop.
+pub fn strip_reasoning(body: &mut Value) -> bool {
+    let Some(obj) = body.as_object_mut() else { return false };
+    let mut any = false;
+    for k in ["reasoning_effort", "reasoning", "think", "chat_template_kwargs"] {
+        any |= obj.remove(k).is_some();
+    }
+    any
+}
+
+/// Does an error say a reasoning parameter is unsupported?
+pub fn rejects_reasoning(status: u16, message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    status == 400 && (m.contains("reasoning") || m.contains("think") || m.contains("chat_template_kwargs")) && (m.contains("support") || m.contains("unrecognized") || m.contains("unknown") || m.contains("invalid") || m.contains("not allowed") || m.contains("extra"))
 }
 
 /// Translates chat-completion chunks into Messages-API stream events.
@@ -256,17 +316,34 @@ pub fn error_message(body: &str) -> String {
 }
 
 /// Model ids from GET /models.
-pub fn parse_models(v: &Value) -> Vec<(String, String)> {
-    v["data"]
+pub fn parse_models(v: &Value, flavor: Flavor) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = v["data"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|m| {
-            let id = m["id"].as_str()?.to_string();
-            let name = m["name"].as_str().unwrap_or(&id).to_string();
+            let id = m["id"].as_str()?;
+            let id = id.strip_prefix("models/").unwrap_or(id).to_string();
+            if !is_chat_model(&id, flavor) {
+                return None;
+            }
+            let name = m["name"].as_str().or_else(|| m["display_name"].as_str()).unwrap_or(&id).to_string();
             Some((id, name))
         })
-        .collect()
+        .collect();
+    if matches!(flavor, Flavor::OpenAi | Flavor::Xai | Flavor::Google) {
+        out.sort_by(|a, b| b.0.cmp(&a.0));
+    }
+    out
+}
+
+/// Hide embedding, audio, image and moderation models from the big providers' lists.
+fn is_chat_model(id: &str, flavor: Flavor) -> bool {
+    if matches!(flavor, Flavor::OpenRouter | Flavor::Local) {
+        return true;
+    }
+    let skip = ["embed", "tts", "whisper", "dall-e", "image", "moderation", "audio", "realtime", "transcribe", "search", "aqa", "imagen", "veo", "babbage", "davinci"];
+    !skip.iter().any(|s| id.contains(s))
 }
 
 #[cfg(test)]
@@ -340,6 +417,10 @@ mod tests {
         assert_eq!(out[2]["content"], "ok");
         assert_eq!(out[2]["tool_calls"][0]["function"]["arguments"], "{\"pattern\":\"*.rs\"}");
         assert_eq!(out[3], json!({"role":"tool","tool_call_id":"t1","content":"a.rs"}));
+        let with_img = vec![json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":[{"type":"text","text":"shot"},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"AAA"}}]}]})];
+        let out = convert_messages("S", &with_img);
+        assert_eq!(out[1], json!({"role":"tool","tool_call_id":"t2","content":"shot"}));
+        assert_eq!(out[2]["content"][1]["image_url"]["url"], "data:image/jpeg;base64,AAA");
         let tools = convert_tools(&[json!({"name":"glob","description":"d","input_schema":{"type":"object"}}), json!({"type":"web_search_20260209","name":"web_search"})]);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["function"]["name"], "glob");

@@ -48,12 +48,34 @@ pub struct Settings {
     pub web_search: bool,
     /// The first-run setup has been completed.
     pub onboarded: bool,
-    /// anthropic | openrouter | local
+    /// anthropic | openai | xai | google | openrouter | local
     pub provider: String,
     pub openrouter_model: String,
+    pub openai_model: String,
+    pub xai_model: String,
+    pub google_model: String,
     /// OpenAI-compatible server for local models (Ollama, LM Studio, vLLM, llama.cpp…).
     pub local_base_url: String,
     pub local_model: String,
+    /// Local models: off | low | normal | medium | high | xhigh | ultra | max.
+    /// xhigh and above enforce a minimum thinking budget (see agent::thinking).
+    pub thinking_level: String,
+    /// Save every run (prompts, thinking, tool calls, results) as a training trace.
+    pub save_traces: bool,
+    /// "all" or "local": which providers' runs are traced.
+    pub traces_scope: String,
+    /// Let the agent see the screen and control mouse and keyboard (always asks first).
+    pub computer_use: bool,
+    /// Let the agent drive the built-in Firefox browser.
+    pub browser_use: bool,
+    /// Run Firefox without a window (the Browser panel shows its screen either way).
+    pub browser_headless: bool,
+    /// geckodriver executable; empty = find it on PATH.
+    pub geckodriver_path: String,
+    /// Firefox executable; empty = let geckodriver find it.
+    pub firefox_path: String,
+    /// Plugins (by folder name) that are installed but turned off.
+    pub disabled_plugins: Vec<String>,
 }
 
 impl Default for Settings {
@@ -78,6 +100,18 @@ impl Default for Settings {
             openrouter_model: "openrouter/auto".into(),
             local_base_url: "http://localhost:11434/v1".into(),
             local_model: String::new(),
+            openai_model: "gpt-5".into(),
+            xai_model: "grok-4".into(),
+            google_model: "gemini-2.5-pro".into(),
+            thinking_level: "normal".into(),
+            save_traces: false,
+            traces_scope: "all".into(),
+            computer_use: false,
+            browser_use: true,
+            browser_headless: true,
+            geckodriver_path: String::new(),
+            firefox_path: String::new(),
+            disabled_plugins: Vec::new(),
         }
     }
 }
@@ -100,7 +134,34 @@ struct Secrets {
     anthropic_api_key: String,
     openrouter_api_key: String,
     local_api_key: String,
+    openai_api_key: String,
+    xai_api_key: String,
+    google_api_key: String,
 }
+
+impl Secrets {
+    fn slot(&mut self, provider: &str) -> Option<&mut String> {
+        Some(match provider {
+            "anthropic" => &mut self.anthropic_api_key,
+            "openrouter" => &mut self.openrouter_api_key,
+            "local" => &mut self.local_api_key,
+            "openai" => &mut self.openai_api_key,
+            "xai" => &mut self.xai_api_key,
+            "google" => &mut self.google_api_key,
+            _ => return None,
+        })
+    }
+}
+
+/// Providers that take a key, with the environment variables checked when none is saved.
+pub const KEY_PROVIDERS: &[(&str, &[&str])] = &[
+    ("anthropic", &["ANTHROPIC_API_KEY"]),
+    ("openai", &["OPENAI_API_KEY"]),
+    ("xai", &["XAI_API_KEY"]),
+    ("google", &["GEMINI_API_KEY", "GOOGLE_API_KEY"]),
+    ("openrouter", &["OPENROUTER_API_KEY"]),
+    ("local", &[]),
+];
 
 /// What the UI sees: settings plus API-key status (never the key itself).
 #[derive(Serialize, Clone)]
@@ -114,6 +175,8 @@ pub struct SettingsView {
     pub api_key_hint: Option<String>,
     pub has_openrouter_key: bool,
     pub has_local_key: bool,
+    /// Provider id → a key is available (saved or from the environment).
+    pub provider_keys: std::collections::BTreeMap<&'static str, bool>,
     pub config_dir: String,
 }
 
@@ -173,9 +236,9 @@ impl SettingsStore {
                 let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
                 format!("…{tail}")
             }),
-            has_openrouter_key: !self.secrets.read().unwrap().openrouter_api_key.trim().is_empty()
-                || std::env::var("OPENROUTER_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
-            has_local_key: !self.secrets.read().unwrap().local_api_key.trim().is_empty(),
+            has_openrouter_key: self.provider_key("openrouter").is_some(),
+            has_local_key: self.provider_key("local").is_some(),
+            provider_keys: KEY_PROVIDERS.iter().map(|(p, _)| (*p, self.provider_key(p).is_some())).collect(),
             config_dir: self.dir.display().to_string(),
         }
     }
@@ -216,35 +279,35 @@ impl SettingsStore {
         self.set_secret("anthropic", key)
     }
 
-    /// Store a provider secret: "anthropic" | "openrouter" | "local".
+    /// Store a provider secret (see `KEY_PROVIDERS`).
     pub fn set_secret(&self, provider: &str, key: String) -> Result<SettingsView> {
         let key = key.trim().to_string();
         {
             let mut s = self.secrets.write().unwrap();
-            match provider {
-                "anthropic" => {
-                    s.anthropic_api_key = key.clone();
-                    *self.api_key.write().unwrap() = key;
-                }
-                "openrouter" => s.openrouter_api_key = key,
-                "local" => s.local_api_key = key,
-                other => return Err(Error::msg(format!("unknown provider {other}"))),
+            let slot = s.slot(provider).ok_or_else(|| Error::msg(format!("unknown provider {provider}")))?;
+            *slot = key.clone();
+            if provider == "anthropic" {
+                *self.api_key.write().unwrap() = key;
             }
             write_private(&self.dir.join("secrets.json"), &serde_json::to_vec_pretty(&*s)?)?;
         }
         Ok(self.view())
     }
 
-    pub fn openrouter_key(&self) -> Option<String> {
-        let k = self.secrets.read().unwrap().openrouter_api_key.trim().to_string();
-        if !k.is_empty() {
-            return Some(k);
+    /// A provider's saved key, else its environment variable.
+    pub fn provider_key(&self, provider: &str) -> Option<String> {
+        if provider == "anthropic" {
+            return self.api_key();
         }
-        std::env::var("OPENROUTER_API_KEY").ok().filter(|k| !k.trim().is_empty())
+        let saved = self.secrets.write().unwrap().slot(provider).map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+        saved.or_else(|| {
+            let vars = KEY_PROVIDERS.iter().find(|(p, _)| *p == provider).map(|(_, v)| *v).unwrap_or(&[]);
+            vars.iter().find_map(|v| std::env::var(v).ok().filter(|k| !k.trim().is_empty()))
+        })
     }
 
-    pub fn local_key(&self) -> Option<String> {
-        Some(self.secrets.read().unwrap().local_api_key.trim().to_string()).filter(|k| !k.is_empty())
+    pub fn config_dir(&self) -> &std::path::Path {
+        &self.dir
     }
 
     fn save(&self) -> Result<()> {

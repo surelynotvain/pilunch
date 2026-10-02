@@ -97,8 +97,31 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    pub fn new(workspace: Option<String>) -> Self {
+        let now = now_ms();
+        Conversation {
+            meta: ConversationMeta {
+                id: uuid::Uuid::new_v4().simple().to_string(),
+                title: "New chat".into(),
+                workspace,
+                created_at: now,
+                updated_at: now,
+                message_count: 0,
+            },
+            messages: Vec::new(),
+            tool_ui: HashMap::new(),
+            usage: UsageTotals::default(),
+        }
+    }
+
     /// Messages in the shape the Messages API expects.
     pub fn api_messages(&self) -> Vec<Value> {
+        let mut out = self.api_messages_full();
+        keep_recent_images(&mut out, KEEP_IMAGES);
+        out
+    }
+
+    fn api_messages_full(&self) -> Vec<Value> {
         self.messages
             .iter()
             .filter_map(|m| {
@@ -112,6 +135,32 @@ impl Conversation {
                 (!content.is_empty()).then(|| serde_json::json!({ "role": m.role, "content": content }))
             })
             .collect()
+    }
+}
+
+/// Screenshots are large: only the most recent few are replayed to the model.
+const KEEP_IMAGES: usize = 3;
+
+/// Replace all but the last `keep` image blocks (top level or inside tool results) with a note.
+fn keep_recent_images(messages: &mut [Value], keep: usize) {
+    fn walk<'a>(v: &'a mut Value, out: &mut Vec<&'a mut Value>) {
+        if let Some(arr) = v.as_array_mut() {
+            for b in arr {
+                if b["type"] == "image" {
+                    out.push(b);
+                } else if b["type"] == "tool_result" {
+                    walk(&mut b["content"], out);
+                }
+            }
+        }
+    }
+    let mut images = Vec::new();
+    for m in messages.iter_mut() {
+        walk(&mut m["content"], &mut images);
+    }
+    let n = images.len();
+    for img in images.into_iter().take(n.saturating_sub(keep)) {
+        *img = serde_json::json!({ "type": "text", "text": "[older screenshot omitted]" });
     }
 }
 
@@ -160,20 +209,7 @@ impl ConversationStore {
     }
 
     pub fn create(&self, workspace: Option<String>) -> Result<Conversation> {
-        let now = now_ms();
-        let conv = Conversation {
-            meta: ConversationMeta {
-                id: uuid::Uuid::new_v4().simple().to_string(),
-                title: "New chat".into(),
-                workspace,
-                created_at: now,
-                updated_at: now,
-                message_count: 0,
-            },
-            messages: Vec::new(),
-            tool_ui: HashMap::new(),
-            usage: UsageTotals::default(),
-        };
+        let conv = Conversation::new(workspace);
         self.save(&conv)?;
         Ok(conv)
     }
@@ -274,5 +310,18 @@ mod tests {
     fn titles() {
         assert_eq!(title_from("\n  Fix the bug  \nmore"), "Fix the bug");
         assert!(title_from(&"a".repeat(100)).ends_with('…'));
+    }
+
+    #[test]
+    fn only_recent_images_are_replayed() {
+        let img = || serde_json::json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":"x"}});
+        let mut msgs: Vec<Value> = (0..5)
+            .map(|i| serde_json::json!({"role":"user","content":[{"type":"tool_result","tool_use_id":format!("t{i}"),"content":[{"type":"text","text":"s"}, img()]}]}))
+            .collect();
+        keep_recent_images(&mut msgs, 3);
+        let kept = serde_json::to_string(&msgs).unwrap().matches("\"image\"").count();
+        assert_eq!(kept, 3);
+        assert_eq!(msgs[0]["content"][0]["content"][1]["text"], "[older screenshot omitted]");
+        assert_eq!(msgs[4]["content"][0]["content"][1]["type"], "image");
     }
 }

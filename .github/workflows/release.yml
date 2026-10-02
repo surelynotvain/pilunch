@@ -60,6 +60,15 @@ jobs:
             - **Any Linux:** `.AppImage` — `chmod +x PiLunch_*.AppImage && ./PiLunch_*.AppImage`
             - **Windows 10/11:** `.msi` or `-setup.exe`
 
-            You need an Anthropic API key (console.anthropic.com); the first-run setup walks you through it.
+            ### What's new in 0.2.0
+            - **More providers:** OpenAI, Google Gemini and xAI Grok join Anthropic, OpenRouter and local models (Ollama, LM Studio, vLLM, llama.cpp).
+            - **Thinking levels for local models:** Off · Low · Normal · Medium · High · XHigh · Ultra · Max. XHigh and above enforce a minimum thinking budget (Max ≈ 16k thinking tokens).
+            - **Training traces:** save every run (thinking, tool calls, results) and export a JSONL dataset for fine-tuning.
+            - **Usage panel** with daily tokens by model and provider.
+            - **Skills** the agent loads and writes itself, **custom tools**, **MCP servers** (stdio + HTTP), **plugins** and **Rust extensions** (`pilunch-extension` crate).
+            - **Built-in Firefox browser** the agent can drive, shown live in a Browser panel, plus optional **computer use**.
+            - Flatter, gradient-free design.
+
+            Connect a provider in the first-run setup: an API key (Anthropic, OpenAI, Google, xAI, OpenRouter) or a local server.
           releaseDraft: false
           prerelease: false

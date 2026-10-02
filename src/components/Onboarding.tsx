@@ -73,7 +73,7 @@ export function Onboarding() {
           {step === 1 && (
             <div>
               <h2>Connect a model</h2>
-              <p className="lead">Use Claude with an API key, any model through OpenRouter, or a model running on this machine.</p>
+              <p className="lead">Use Claude, GPT, Gemini or Grok with an API key, any model through OpenRouter, or a model running on this machine.</p>
               <ProviderPicker />
             </div>
           )}

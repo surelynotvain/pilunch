@@ -13,6 +13,8 @@ interface Layout {
   terminalHeight: number;
   /** Chat takes the whole center area (ChatGPT-style) even when files are open. */
   chatFocus: boolean;
+  /** The Browser panel takes the center area (chat docks to the right). */
+  browserVisible: boolean;
 }
 
 interface Toast {
@@ -21,7 +23,8 @@ interface Toast {
   text: string;
 }
 
-type Overlay = null | "settings" | "quickOpen" | "commands";
+export type HubTab = "skills" | "tools" | "mcp" | "plugins" | "usage" | "traces";
+type Overlay = null | "settings" | "quickOpen" | "commands" | "customize";
 
 interface AppState {
   settings: SettingsView | null;
@@ -29,6 +32,7 @@ interface AppState {
   git: GitStatus | null;
   layout: Layout;
   overlay: Overlay;
+  hubTab: HubTab;
   toasts: Toast[];
   indexedFiles: number | null;
 
@@ -41,6 +45,7 @@ interface AppState {
   setLayout(patch: Partial<Layout>): void;
   showSidebar(view: SidebarView): void;
   setOverlay(o: Overlay): void;
+  openHub(tab: HubTab): void;
   toast(text: string, kind?: Toast["kind"]): void;
   dismissToast(id: number): void;
 }
@@ -56,6 +61,7 @@ function loadLayout(): Layout {
     terminalVisible: false,
     terminalHeight: 260,
     chatFocus: false,
+    browserVisible: false,
   };
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
@@ -74,6 +80,7 @@ export const useApp = create<AppState>((set, get) => ({
   git: null,
   layout: loadLayout(),
   overlay: null,
+  hubTab: "skills",
   toasts: [],
   indexedFiles: null,
 
@@ -150,6 +157,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   setOverlay(overlay) {
     set({ overlay });
+  },
+
+  openHub(hubTab) {
+    set({ overlay: "customize", hubTab });
   },
 
   toast(text, kind = "info") {

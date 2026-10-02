@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "../Icon";
-import { useChat } from "../../store/chat";
+import { useChat, type Approval } from "../../store/chat";
 import { useEditor } from "../../store/editor";
 import { formatBytes } from "../../lib/util";
 import type { ToolUi } from "../../lib/types";
@@ -25,7 +25,16 @@ const TOOL_ICON: Record<string, IconName> = {
   git_log: "branch",
   web_fetch: "globe",
   todo_write: "list",
+  skill_load: "book",
+  skill_save: "book",
+  browser: "globe",
+  computer: "monitor",
 };
+
+/** Icon for a tool, including generated names (MCP, custom tools). */
+export function toolIcon(name: string): IconName {
+  return TOOL_ICON[name] ?? (name.startsWith("mcp__") ? "plug" : "wrench");
+}
 
 export function DiffView({ diff }: { diff: string }) {
   const lines = diff.split("\n");
@@ -57,6 +66,14 @@ function LiveOutput({ text }: { text: string }) {
   );
 }
 
+const APPROVAL_COPY: Record<Approval["kind"], { question: string; allow: string; session: string; prefix: string }> = {
+  edit: { question: "Apply this change?", allow: "Apply", session: "Apply all edits in this chat", prefix: "" },
+  command: { question: "Run this command?", allow: "Run", session: "Allow all commands in this chat", prefix: "$ " },
+  network: { question: "Open this URL?", allow: "Allow", session: "Allow all requests in this chat", prefix: "GET " },
+  tool: { question: "Call this tool?", allow: "Call", session: "Allow all tool calls in this chat", prefix: "" },
+  computer: { question: "Let the agent control your computer?", allow: "Allow", session: "Allow computer use in this chat", prefix: "" },
+};
+
 function ApprovalBox({ convId, toolId }: { convId: string; toolId: string }) {
   const approval = useChat((s) => s.runs[convId]?.approvals.find((a) => a.toolId === toolId));
   const respond = useChat((s) => s.respond);
@@ -64,14 +81,14 @@ function ApprovalBox({ convId, toolId }: { convId: string; toolId: string }) {
   const [showFeedback, setShowFeedback] = useState(false);
   if (!approval) return null;
   const isEdit = approval.kind === "edit";
-  const isNet = approval.kind === "network";
+  const copy = APPROVAL_COPY[approval.kind];
   return (
     <>
-      <div className="tool-body">{isEdit ? <DiffView diff={approval.detail} /> : <pre>{isNet ? "GET " : "$ "}{approval.detail}</pre>}</div>
+      <div className="tool-body">{isEdit ? <DiffView diff={approval.detail} /> : <pre>{copy.prefix}{approval.detail}</pre>}</div>
       <div className="approval">
         <div className="question">
           <Icon name="shield" size={15} />
-          {isEdit ? "Apply this change?" : isNet ? "Fetch this URL?" : "Run this command?"}
+          {copy.question}
         </div>
         {showFeedback && (
           <input
@@ -87,10 +104,10 @@ function ApprovalBox({ convId, toolId }: { convId: string; toolId: string }) {
         )}
         <div className="row">
           <button className="btn primary sm" onClick={() => void respond(approval.approvalId, "allow")}>
-            <Icon name="check" size={14} /> {isEdit ? "Apply" : isNet ? "Fetch" : "Run"}
+            <Icon name="check" size={14} /> {copy.allow}
           </button>
           <button className="btn sm" onClick={() => void respond(approval.approvalId, "allowSession")}>
-            {isEdit ? "Apply all edits in this chat" : isNet ? "Allow all requests in this chat" : "Allow all commands in this chat"}
+            {copy.session}
           </button>
           <span style={{ flex: 1 }} />
           {showFeedback ? (
@@ -145,7 +162,7 @@ export const ToolCard = memo(function ToolCard({ convId, toolId, name, input, ui
     <div className={`tool${pending ? " pending" : ""}`} data-tool={name}>
       <div className="tool-head" onClick={() => hasBody && setOpen(!open)}>
         {statusEl}
-        <Icon name={TOOL_ICON[name] ?? "wrench"} size={14} />
+        <Icon name={toolIcon(name)} size={14} />
         <span className="summary ellipsis" title={title}>
           {title}
           {status === "denied" && <span className="muted"> — denied</span>}
@@ -170,7 +187,9 @@ export const ToolCard = memo(function ToolCard({ convId, toolId, name, input, ui
       ) : running && liveOutput != null ? (
         <LiveOutput text={liveOutput} />
       ) : open && detail ? (
-        <div className="tool-body">{ui?.detailKind === "diff" ? <DiffView diff={detail} /> : <pre>{detail}</pre>}</div>
+        <div className="tool-body">
+          {ui?.detailKind === "diff" ? <DiffView diff={detail} /> : ui?.detailKind === "image" ? <img className="tool-shot" src={detail} alt="Screenshot" /> : <pre>{detail}</pre>}
+        </div>
       ) : open && liveOutput ? (
         <LiveOutput text={liveOutput} />
       ) : null}

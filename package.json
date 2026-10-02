@@ -1,7 +1,7 @@
 {
   "name": "pilunch",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "PiLunch - an AI code editor for Linux (and Windows), built with Rust + TypeScript on Tauri",
   "type": "module",
   "scripts": {

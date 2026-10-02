@@ -11,24 +11,42 @@ The core is written in **Rust** (Tauri 2) and the UI in **TypeScript** (React + 
 | ![Chat](docs/screenshots/chat.png) | ![Approval](docs/screenshots/approval.png) |
 | **Commands, results and the editor side by side** | **Light theme** |
 | ![Command](docs/screenshots/command.png) | ![Light](docs/screenshots/light.png) |
+| **Customize: skills, tools, MCP, plugins** | **Usage** |
+| ![Customize](docs/screenshots/customize.png) | ![Usage](docs/screenshots/usage.png) |
 
 <sub>Screenshots come from the automated end-to-end test, which drives the real app with scripted model responses.</sub>
 
 ## Features
 
-- **A coding agent in a chat window, with 20 tools.** Ask in plain language and Claude works through the project, streaming as it goes:
+- **A coding agent in a chat window, with 20+ tools.** Ask in plain language and the agent works through the project, streaming as it goes:
   - **Explore:** `read_file`, `read_many_files`, `list_dir`, `glob`, `grep`, `file_info`
   - **Git:** `git_status`, `git_diff`, `git_log`
   - **Change:** `edit_file`, `multi_edit`, `write_file`, `find_replace` (project-wide), `create_directory`, `move_path`, `delete_path` (to the trash)
   - **Run:** `run_command`
   - **Web:** `web_fetch`, plus Anthropic's built-in `web_search` (optional)
   - **Plan:** `todo_write`, shown as a live checklist above the composer
-- **Bring your own model.** Connect one of three providers:
+  - **Skills:** `skill_load`, `skill_save` (the agent writes its own skills)
+  - **Browser:** `browser`, which drives the built-in Firefox. **Computer use:** `computer` (optional)
+  - **Yours:** custom tools, MCP servers, plugins and Rust extensions
+- **Bring your own model.** Connect one of six providers:
   - **Anthropic**: Claude with an API key, with adaptive thinking, prompt caching and web search.
-  - **OpenRouter**: one key for Claude, GPT, Gemini, Grok, DeepSeek, Qwen and hundreds more. Pick the model from a live list.
+  - **OpenAI**, **Google** (Gemini) and **xAI** (Grok): an API key and a model from a live list.
+  - **OpenRouter**: one key for Claude, GPT, Gemini, Grok, DeepSeek, Qwen and hundreds more.
   - **Local**: any OpenAI-compatible server (Ollama, LM Studio, vLLM, llama.cpp). Nothing leaves your machine.
 
-  All three providers run the same tools and approval flow.
+  All providers run the same tools and approval flow.
+- **Thinking levels for local models:** Off, Low, Normal, Medium, High, XHigh, Ultra and Max.
+  - The lower levels set the server's reasoning options (`reasoning_effort`, `enable_thinking`, `think`, `/no_think`).
+  - XHigh and above also enforce a **minimum thinking budget**: if the model answers before spending it, the answer is discarded and the model is asked to keep reasoning from where it stopped (budget forcing). Max forces about 16k thinking tokens.
+- **Training traces.** Turn on *Save traces* and every run (system prompt, tools, thinking as `reasoning_content`, tool calls and results) is saved as a chat-completions trace. Export them all as one JSONL dataset for fine-tuning, including only local-model runs if you like.
+- **Usage panel.** Daily token use plus totals by model and provider, recorded locally.
+- **Skills, custom tools, MCP, plugins and Rust extensions.** See [docs/extensions.md](docs/extensions.md).
+  - **Skills** are Markdown instructions the agent loads when relevant, and writes itself after research.
+  - **Custom tools** are shell commands with a JSON Schema.
+  - **MCP servers** connect over stdio or HTTP, in the Claude Desktop config format.
+  - **Plugins** bundle all of these. **Rust extensions** are built with the `pilunch-extension` crate and compiled and installed by PiLunch.
+- **Built-in browser.** The agent drives a real Firefox (via geckodriver). The **Browser panel** shows it live, and you can click, type and scroll on the page yourself.
+- **Computer use** (opt-in). Screenshots plus mouse and keyboard control, on X11, Wayland or Windows. Every action asks first.
 - **Guided setup.** A first-run wizard connects a provider, then picks the model, effort, theme and permission mode, and opens a project.
 - **You stay in control.** Every edit is shown as a diff and every command as text before it runs. You can **Apply**, **Allow for this chat**, or **Deny** with feedback ("use a markdown file instead"), and Claude adjusts. There are four permission modes: *Ask*, *Auto-accept edits*, *Plan* (read-only) and *Bypass*.
 - **A real editor.** Monaco (the editor inside VS Code) with tabs, syntax highlighting for 80+ languages, minimap and sticky scroll. Files the agent changes reload live, and unsaved work is never overwritten.
@@ -147,14 +165,20 @@ The end-to-end test needs `tauri-driver` (`cargo install tauri-driver`), `WebKit
 ```
 src-tauri/src/            Rust core
   agent/                  the agent: api.rs (Anthropic HTTP + request options), sse.rs (stream parsing),
-                          openai.rs (OpenRouter/local: OpenAI-compatible requests translated into the same events),
-                          tools.rs + toolbox.rs (tools), prompt.rs, mod.rs (the loop)
+                          openai.rs (OpenAI/Google/xAI/OpenRouter/local: OpenAI-compatible requests translated into
+                          the same events), thinking.rs (local thinking levels + budget forcing), tools.rs + toolbox.rs
+                          (built-in tools), extras.rs (skills, custom/MCP tools, browser, computer), mod.rs (the loop)
+  ext/                    skills.rs, custom_tools.rs, mcp.rs (MCP client: stdio + Streamable HTTP), plugins.rs
+  browser.rs  computer.rs Firefox over WebDriver; screenshots + mouse/keyboard control
+  records.rs              usage log and training traces
   workspace.rs            path sandbox
   search.rs               file index, fuzzy matching, grep
   fs_ops.rs  git.rs  terminal.rs  watcher.rs  settings.rs  conversations.rs  commands.rs
 src/                      TypeScript UI
   store/                  zustand stores (app, editor, chat)
   components/             chat/, editor/, sidebar/, terminal, palette, settings…
+  components/customize/   skills, tools, MCP, plugins, usage and traces
+extensions/               pilunch-extension (Rust SDK for extensions) and examples/hello-ext
 e2e/                      WebDriver end-to-end test + mock Messages API
 ```
 
@@ -164,12 +188,15 @@ e2e/                      WebDriver end-to-end test + mock Messages API
 |---|---|---|
 | Settings, API keys | `~/.config/pilunch/` | `%APPDATA%\pilunch\` |
 | Chat history | `~/.local/share/pilunch/conversations/` | `%APPDATA%\pilunch\conversations\` |
+| Skills, custom tools, MCP config, plugins | `~/.config/pilunch/{skills,tools,mcp.json,plugins}` | `%APPDATA%\pilunch\…` |
+| Usage log, training traces | `~/.local/share/pilunch/{usage.jsonl,traces/}` | `%APPDATA%\pilunch\…` |
 
 You can override these with `PILUNCH_CONFIG_DIR` and `PILUNCH_DATA_DIR`.
 
 ## Not there yet
 
 - No sign-in with a Claude or ChatGPT subscription account. Use an API key, OpenRouter or a local model.
+- The built-in browser needs Firefox and geckodriver installed. It is driven over WebDriver, not embedded.
 - No language-server integration (go-to-definition, project-wide type checking).
 - There are no agent checkpoints: undo the agent's changes with the editor's undo or with git.
 - The Windows build is set up but has not been tested as thoroughly as Linux.

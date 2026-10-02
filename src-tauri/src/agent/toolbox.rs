@@ -27,6 +27,7 @@ fn ok(content: String, summary: String, detail: Option<String>, path: Option<Str
         },
         content: truncate_middle(&content, MAX_RESULT),
         is_error: false,
+        images: Vec::new(),
     }
 }
 

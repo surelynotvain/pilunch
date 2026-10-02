@@ -4,9 +4,15 @@ mod agent;
 mod commands;
 mod conversations;
 mod error;
+mod ext;
+mod ext_commands;
 mod fs_ops;
+mod browser;
+mod computer;
 mod git;
+mod media;
 mod process;
+mod records;
 mod search;
 mod settings;
 mod state;
@@ -62,6 +68,30 @@ pub fn run() {
             commands::agent_cancel_all,
             commands::agent_respond,
             commands::agent_running,
+            ext_commands::usage_summary,
+            ext_commands::clear_usage,
+            ext_commands::trace_stats,
+            ext_commands::export_traces,
+            ext_commands::clear_traces,
+            ext_commands::list_skills,
+            ext_commands::read_skill,
+            ext_commands::save_skill,
+            ext_commands::delete_skill,
+            ext_commands::list_custom_tools,
+            ext_commands::save_custom_tool,
+            ext_commands::delete_custom_tool,
+            ext_commands::mcp_config,
+            ext_commands::save_mcp_config,
+            ext_commands::mcp_status,
+            ext_commands::list_plugins,
+            ext_commands::install_plugin_folder,
+            ext_commands::install_plugin_git,
+            ext_commands::remove_plugin,
+            ext_commands::set_plugin_enabled,
+            ext_commands::build_rust_extension,
+            ext_commands::browser_action,
+            ext_commands::browser_running,
+            ext_commands::open_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building PiLunch");
@@ -71,6 +101,11 @@ pub fn run() {
             let state = handle.state::<state::AppState>();
             state.agent.cancel_all();
             state.terminals.kill_all();
+            // Close Firefox cleanly (killing only geckodriver can leave it running).
+            tauri::async_runtime::block_on(async {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), state.browser.close(&state.http)).await;
+                state.mcp.shutdown().await;
+            });
         }
     });
 }

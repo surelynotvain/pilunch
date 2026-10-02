@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
-import { MODELS } from "../lib/models";
+import { MODELS, THINKING_LEVELS } from "../lib/models";
 import { useApp } from "../store/app";
 import { ProviderPicker } from "./ProviderPicker";
-import type { Effort, PermissionMode, Settings, Theme } from "../lib/types";
+import type { Effort, PermissionMode, Settings, Theme, ThinkingLevel } from "../lib/types";
 
 function Switch({ on, onChange, testId }: { on: boolean; onChange: (v: boolean) => void; testId?: string }) {
   return <button className={`switch${on ? " on" : ""}`} onClick={() => onChange(!on)} role="switch" aria-checked={on} data-testid={testId} />;
@@ -79,19 +79,38 @@ export function SettingsModal() {
                 </div>
               </div>
             )}
-            <div className="field">
-              <label>
-                Effort
-                <span className="help">How hard the model thinks. Higher is smarter but slower and costs more.</span>
-              </label>
-              <select className="select" value={s.effort} onChange={(e) => update({ effort: e.target.value as Effort })}>
-                <option value="low">Low — fastest</option>
-                <option value="medium">Medium</option>
-                <option value="high">High (recommended)</option>
-                <option value="xhigh">Extra high</option>
-                <option value="max">Max</option>
-              </select>
-            </div>
+            {s.provider === "local" ? (
+              <div className="field">
+                <label>
+                  Thinking level
+                  <span className="help">
+                    Off to High set the server's reasoning options. XHigh, Ultra and Max also enforce a minimum thinking budget: if the model answers too early it is
+                    asked to keep reasoning (Max forces about 16k thinking tokens).
+                  </span>
+                </label>
+                <select className="select" value={s.thinkingLevel} onChange={(e) => update({ thinkingLevel: e.target.value as ThinkingLevel })} data-testid="settings-thinking">
+                  {THINKING_LEVELS.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label} — {t.hint}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="field">
+                <label>
+                  Effort
+                  <span className="help">How hard the model thinks. Higher is smarter but slower and costs more.</span>
+                </label>
+                <select className="select" value={s.effort} onChange={(e) => update({ effort: e.target.value as Effort })}>
+                  <option value="low">Low — fastest</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High (recommended)</option>
+                  <option value="xhigh">Extra high</option>
+                  <option value="max">Max</option>
+                </select>
+              </div>
+            )}
             {s.provider === "anthropic" && (
               <div className="field">
                 <label>
@@ -128,7 +147,7 @@ export function SettingsModal() {
             <div className="field">
               <label>
                 Permissions
-                <span className="help">What Claude may do without asking.</span>
+                <span className="help">What the agent may do without asking.</span>
               </label>
               <select className="select" value={s.permissionMode} onChange={(e) => update({ permissionMode: e.target.value as PermissionMode })}>
                 <option value="ask">Ask before edits and commands</option>
@@ -150,6 +169,48 @@ export function SettingsModal() {
                 onChange={(e) => setInstructions(e.target.value)}
                 onBlur={() => instructions !== s.customInstructions && update({ customInstructions: instructions })}
               />
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <h3>Browser & computer use</h3>
+            <div className="field">
+              <label>
+                Browser
+                <span className="help">Let the agent browse with the built-in Firefox (you watch it in the Browser panel). Opening a page asks first.</span>
+              </label>
+              <Switch on={s.browserUse} onChange={(v) => update({ browserUse: v })} testId="settings-browser" />
+            </div>
+            <div className="field">
+              <label>
+                Headless Firefox
+                <span className="help">Run Firefox without its own window. Turn off to watch it in a separate window too.</span>
+              </label>
+              <Switch on={s.browserHeadless} onChange={(v) => update({ browserHeadless: v })} />
+            </div>
+            <div className="field">
+              <label>
+                geckodriver
+                <span className="help">Path to geckodriver (github.com/mozilla/geckodriver). Empty = find it on PATH.</span>
+              </label>
+              <Lazy value={s.geckodriverPath} onSave={(v) => update({ geckodriverPath: v.trim() })} placeholder="geckodriver" />
+            </div>
+            <div className="field">
+              <label>
+                Firefox
+                <span className="help">Path to the Firefox binary. Empty = the default install.</span>
+              </label>
+              <Lazy value={s.firefoxPath} onSave={(v) => update({ firefoxPath: v.trim() })} placeholder="/usr/bin/firefox" />
+            </div>
+            <div className="field">
+              <label>
+                Computer use
+                <span className="help">
+                  Let the agent take screenshots and control your mouse and keyboard. Every action asks first unless you allow it for a chat. Needs xdotool and
+                  ImageMagick on X11, or grim and ydotool/wtype on Wayland.
+                </span>
+              </label>
+              <Switch on={s.computerUse} onChange={(v) => update({ computerUse: v })} testId="settings-computer" />
             </div>
           </div>
 
