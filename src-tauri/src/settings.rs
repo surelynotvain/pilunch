@@ -1,0 +1,244 @@
+//! User settings (`~/.config/pilunch/settings.json`) and the API key
+//! (`~/.config/pilunch/secrets.json`, mode 0600). The API key never travels back to the
+//! webview: the UI only learns whether one is configured and its last four characters.
+
+use crate::error::{Error, Result};
+use crate::util::{atomic_write, write_private};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::RwLock;
+
+pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
+pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
+
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionMode {
+    /// Ask before every file edit and command.
+    #[default]
+    Ask,
+    /// Apply file edits automatically, ask before commands.
+    AcceptEdits,
+    /// Read-only: the agent can explore and plan but not change anything.
+    Plan,
+    /// Never ask. Edits and commands run immediately.
+    Bypass,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    pub model: String,
+    /// low | medium | high | xhigh | max
+    pub effort: String,
+    pub max_tokens: u32,
+    pub base_url: String,
+    pub permission_mode: PermissionMode,
+    pub show_thinking: bool,
+    pub custom_instructions: String,
+    /// dark | light | system
+    pub theme: String,
+    pub editor_font_size: u32,
+    pub editor_word_wrap: bool,
+    pub editor_minimap: bool,
+    /// Empty = $SHELL (Linux/macOS) or PowerShell (Windows)
+    pub terminal_shell: String,
+    pub recent_workspaces: Vec<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            model: DEFAULT_MODEL.into(),
+            effort: "high".into(),
+            max_tokens: 32000,
+            base_url: DEFAULT_BASE_URL.into(),
+            permission_mode: PermissionMode::Ask,
+            show_thinking: true,
+            custom_instructions: String::new(),
+            theme: "dark".into(),
+            editor_font_size: 14,
+            editor_word_wrap: false,
+            editor_minimap: true,
+            terminal_shell: String::new(),
+            recent_workspaces: Vec::new(),
+        }
+    }
+}
+
+impl Settings {
+    pub fn is_default_endpoint(&self) -> bool {
+        let b = self.base_url.trim().trim_end_matches('/');
+        b.is_empty() || b == DEFAULT_BASE_URL
+    }
+
+    pub fn api_base(&self) -> String {
+        let b = self.base_url.trim().trim_end_matches('/');
+        if b.is_empty() { DEFAULT_BASE_URL.to_string() } else { b.to_string() }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct Secrets {
+    anthropic_api_key: String,
+}
+
+/// What the UI sees: settings plus API-key status (never the key itself).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsView {
+    #[serde(flatten)]
+    pub settings: Settings,
+    pub has_api_key: bool,
+    /// "settings" | "env"
+    pub api_key_source: Option<&'static str>,
+    pub api_key_hint: Option<String>,
+    pub config_dir: String,
+}
+
+pub struct SettingsStore {
+    dir: PathBuf,
+    settings: RwLock<Settings>,
+    api_key: RwLock<String>,
+}
+
+impl SettingsStore {
+    pub fn load(dir: PathBuf) -> Self {
+        let settings = std::fs::read(dir.join("settings.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+            .unwrap_or_default();
+        let api_key = std::fs::read(dir.join("secrets.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Secrets>(&b).ok())
+            .map(|s| s.anthropic_api_key)
+            .unwrap_or_default();
+        Self { dir, settings: RwLock::new(settings), api_key: RwLock::new(api_key) }
+    }
+
+    pub fn get(&self) -> Settings {
+        self.settings.read().unwrap().clone()
+    }
+
+    pub fn permission_mode(&self) -> PermissionMode {
+        self.settings.read().unwrap().permission_mode
+    }
+
+    /// The configured key, or `ANTHROPIC_API_KEY` from the environment.
+    pub fn api_key(&self) -> Option<String> {
+        let k = self.api_key.read().unwrap().trim().to_string();
+        if !k.is_empty() {
+            return Some(k);
+        }
+        std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.trim().is_empty())
+    }
+
+    pub fn view(&self) -> SettingsView {
+        let stored = self.api_key.read().unwrap().trim().to_string();
+        let (source, key) = if !stored.is_empty() {
+            (Some("settings"), Some(stored))
+        } else {
+            match std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.trim().is_empty()) {
+                Some(k) => (Some("env"), Some(k)),
+                None => (None, None),
+            }
+        };
+        SettingsView {
+            settings: self.get(),
+            has_api_key: key.is_some(),
+            api_key_source: source,
+            api_key_hint: key.map(|k| {
+                let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+                format!("…{tail}")
+            }),
+            config_dir: self.dir.display().to_string(),
+        }
+    }
+
+    /// Merge a partial JSON object into the settings (type-checked by deserializing).
+    pub fn update(&self, patch: serde_json::Value) -> Result<SettingsView> {
+        let serde_json::Value::Object(patch) = patch else {
+            return Err(Error::msg("settings patch must be an object"));
+        };
+        {
+            let mut guard = self.settings.write().unwrap();
+            let mut current = serde_json::to_value(&*guard)?;
+            let obj = current.as_object_mut().expect("settings serialize to an object");
+            for (k, v) in patch {
+                obj.insert(k, v);
+            }
+            let mut next: Settings = serde_json::from_value(current)
+                .map_err(|e| Error::msg(format!("invalid setting: {e}")))?;
+            next.editor_font_size = next.editor_font_size.clamp(8, 40);
+            next.max_tokens = next.max_tokens.clamp(1024, 128_000);
+            *guard = next;
+        }
+        self.save()?;
+        Ok(self.view())
+    }
+
+    pub fn add_recent_workspace(&self, path: &str) {
+        {
+            let mut s = self.settings.write().unwrap();
+            s.recent_workspaces.retain(|p| p != path);
+            s.recent_workspaces.insert(0, path.to_string());
+            s.recent_workspaces.truncate(12);
+        }
+        let _ = self.save();
+    }
+
+    pub fn set_api_key(&self, key: String) -> Result<SettingsView> {
+        *self.api_key.write().unwrap() = key.trim().to_string();
+        let secrets = Secrets { anthropic_api_key: self.api_key.read().unwrap().clone() };
+        write_private(&self.dir.join("secrets.json"), &serde_json::to_vec_pretty(&secrets)?)?;
+        Ok(self.view())
+    }
+
+    fn save(&self) -> Result<()> {
+        let data = serde_json::to_vec_pretty(&*self.settings.read().unwrap())?;
+        atomic_write(&self.dir.join("settings.json"), &data)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_merges_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::load(dir.path().to_path_buf());
+        assert_eq!(store.get().model, DEFAULT_MODEL);
+        let v = store
+            .update(serde_json::json!({"model": "claude-sonnet-5-5", "permissionMode": "acceptEdits", "editorFontSize": 99}))
+            .unwrap();
+        assert_eq!(v.settings.model, "claude-sonnet-5-5");
+        assert_eq!(v.settings.permission_mode, PermissionMode::AcceptEdits);
+        assert_eq!(v.settings.editor_font_size, 40);
+        let reloaded = SettingsStore::load(dir.path().to_path_buf());
+        assert_eq!(reloaded.get().model, "claude-sonnet-5-5");
+        // bad types are rejected and leave settings unchanged
+        assert!(store.update(serde_json::json!({"maxTokens": "lots"})).is_err());
+        assert_eq!(store.get().model, "claude-sonnet-5-5");
+    }
+
+    #[test]
+    fn api_key_is_private_and_hinted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::load(dir.path().to_path_buf());
+        let v = store.set_api_key("sk-ant-test-abcd1234".into()).unwrap();
+        assert!(v.has_api_key);
+        assert_eq!(v.api_key_hint.as_deref(), Some("…1234"));
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(!json.contains("sk-ant-test"), "key must never be serialized to the UI");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join("secrets.json")).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert_eq!(SettingsStore::load(dir.path().to_path_buf()).api_key().as_deref(), Some("sk-ant-test-abcd1234"));
+    }
+}

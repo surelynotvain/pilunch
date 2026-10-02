@@ -1,0 +1,66 @@
+[package]
+name = "pilunch"
+version = "0.1.0"
+description = "PiLunch - an AI code editor"
+authors = ["PiLunch contributors"]
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[lib]
+name = "pilunch_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+reqwest = { version = "0.13", features = ["json", "stream"] }
+
+# ripgrep's own crates: gitignore-aware parallel walking + fast searching
+ignore = "0.4"
+globset = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+regex = "1"
+# Helix's fuzzy matcher for quick-open
+nucleo-matcher = "0.3"
+similar = "2"
+notify = "8"
+notify-debouncer-full = "0.5"
+portable-pty = "0.9"
+
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+thiserror = "2"
+dunce = "1"
+memchr = "2"
+trash = "5"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tauri = { version = "2", features = ["test"] }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+panic = "abort"
+strip = true
+
+# Keep dev builds snappy while still optimizing dependencies (regex, ignore, etc.).
+[profile.dev.package."*"]
+opt-level = 2
