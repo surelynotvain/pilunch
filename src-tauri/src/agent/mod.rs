@@ -6,6 +6,7 @@
 //! ends its turn. The conversation is saved after every step.
 
 pub mod api;
+pub mod openai;
 pub mod events;
 pub mod prompt;
 pub mod sse;
@@ -132,7 +133,7 @@ struct Run<'a, R: Runtime> {
     app: &'a AppHandle<R>,
     state: &'a AppState,
     settings: Settings,
-    api_key: String,
+    api_key: Option<String>,
     ws: Option<Workspace>,
     conv: Conversation,
     cancel: CancellationToken,
@@ -149,14 +150,25 @@ impl<'a, R: Runtime> Run<'a, R> {
             Ok(c) => c,
             Err(e) => return fail(sink, e.to_string()),
         };
-        let Some(api_key) = state.settings.api_key() else {
-            return fail(sink, "No API key configured. Add your Anthropic API key in Settings (Ctrl+,) or set ANTHROPIC_API_KEY.".into());
-        };
+        let settings = state.settings.get();
+        let api_key = state.settings.api_key();
+        match settings.provider.as_str() {
+            "anthropic" if api_key.is_none() => {
+                return fail(sink, "No API key configured. Add your Anthropic API key in Settings (Ctrl+,), set ANTHROPIC_API_KEY, or switch to another provider.".into());
+            }
+            "openrouter" if state.settings.openrouter_key().is_none() => {
+                return fail(sink, "No OpenRouter API key configured. Add it in Settings (Ctrl+,).".into());
+            }
+            "local" if settings.local_model.trim().is_empty() => {
+                return fail(sink, "Pick a local model in Settings (Ctrl+,) — make sure your local server (e.g. Ollama) is running.".into());
+            }
+            _ => {}
+        }
         let ws = match conv.meta.workspace.as_deref().map(Workspace::open).transpose() {
             Ok(ws) => ws,
             Err(e) => return fail(sink, format!("The folder for this chat is unavailable: {e}")),
         };
-        let mut run = Run { app, state, settings: state.settings.get(), api_key, ws, conv, cancel };
+        let mut run = Run { app, state, settings, api_key, ws, conv, cancel };
         run.loop_(req, sink).await
     }
 
@@ -192,8 +204,9 @@ impl<'a, R: Runtime> Run<'a, R> {
             },
         );
 
+        let endpoint = openai::Endpoint::for_settings(&self.settings, self.state.settings.openrouter_key(), self.state.settings.local_key());
         let system = prompt::system_prompt(self.ws.as_ref(), self.state.settings.permission_mode(), &self.settings.custom_instructions);
-        let eager = self.settings.is_default_endpoint();
+        let eager = self.settings.is_default_endpoint() && endpoint.is_none();
         let mut truncations = 0;
 
         loop {
@@ -201,7 +214,7 @@ impl<'a, R: Runtime> Run<'a, R> {
                 return "cancelled".into();
             }
             let mode = self.state.settings.permission_mode();
-            let web_search = self.settings.web_search && self.settings.is_default_endpoint() && api::ModelCaps::of(&self.settings.model).adaptive;
+            let web_search = endpoint.is_none() && self.settings.web_search && self.settings.is_default_endpoint() && api::ModelCaps::of(&self.settings.model).adaptive;
             let tools = if self.ws.is_some() {
                 tools::definitions(&tools::ToolOptions { mode, eager, web_search })
             } else if web_search {
@@ -209,14 +222,19 @@ impl<'a, R: Runtime> Run<'a, R> {
             } else {
                 Vec::new()
             };
-            let (body, betas) = api::build_request(RequestParts {
-                settings: &self.settings,
-                system: &system,
-                tools,
-                messages: self.conv.api_messages(),
-            });
+            let req = match &endpoint {
+                Some(ep) => Req {
+                    body: openai::build_request(&self.settings, ep, &system, &tools, &self.conv.api_messages()),
+                    betas: Vec::new(),
+                    openai: Some(ep.clone()),
+                },
+                None => {
+                    let (body, betas) = api::build_request(RequestParts { settings: &self.settings, system: &system, tools, messages: self.conv.api_messages() });
+                    Req { body, betas, openai: None }
+                }
+            };
 
-            let turn = match self.stream_with_retries(&body, &betas, sink).await {
+            let turn = match self.stream_with_retries(&req, sink).await {
                 Ok(t) => t,
                 Err(StreamFail::Cancelled(partial)) => {
                     sink.send(AgentEvent::Reset);
@@ -341,10 +359,10 @@ impl<'a, R: Runtime> Run<'a, R> {
     // Streaming
     // -----------------------------------------------------------------------------------
 
-    async fn stream_with_retries(&self, body: &Value, betas: &[&str], sink: &mut Sink) -> std::result::Result<AssistantTurn, StreamFail> {
+    async fn stream_with_retries(&self, req: &Req, sink: &mut Sink) -> std::result::Result<AssistantTurn, StreamFail> {
         let mut attempt = 0;
         loop {
-            match self.stream_once(body, betas, sink).await {
+            match self.stream_once(req, sink).await {
                 Err(StreamFail::Api(e)) if e.retryable() && attempt < MAX_RETRIES => {
                     attempt += 1;
                     let backoff = Duration::from_millis(1000 * 2u64.pow(attempt - 1) + now_ms() % 400);
@@ -361,15 +379,75 @@ impl<'a, R: Runtime> Run<'a, R> {
         }
     }
 
-    async fn stream_once(&self, body: &Value, betas: &[&str], sink: &mut Sink) -> std::result::Result<AssistantTurn, StreamFail> {
-        let base = self.settings.api_base();
+    async fn open(&self, req: &Req) -> std::result::Result<reqwest::Response, ApiError> {
+        match &req.openai {
+            None => api::open_stream(&self.state.http, &self.settings.api_base(), self.api_key.as_deref().unwrap_or_default(), &req.body, &req.betas).await,
+            Some(ep) => {
+                let resp = ep
+                    .request(&self.state.http, reqwest::Method::POST, "/chat/completions")
+                    .header("accept", "text/event-stream")
+                    .json(&req.body)
+                    .send()
+                    .await
+                    .map_err(|e| ApiError::Network(format!("{} (is the server at {} running?)", api::describe_reqwest(&e), ep.base)))?;
+                if resp.status().is_success() {
+                    return Ok(resp);
+                }
+                let status = resp.status().as_u16();
+                let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).map(Duration::from_secs);
+                let text = resp.text().await.unwrap_or_default();
+                Err(ApiError::Http { status, kind: String::new(), message: openai::error_message(&text), retry_after })
+            }
+        }
+    }
+
+    /// Fold one stream event into the message and forward it to the UI.
+    fn handle_event(&self, parsed: StreamEvent, builder: &mut MessageBuilder, sink: &mut Sink) -> std::result::Result<(), StreamFail> {
+        match parsed {
+            StreamEvent::MessageStart { message } => {
+                sink.send(AgentEvent::RequestStarted { model: message.model.clone() });
+                builder.on_message_start(message);
+            }
+            StreamEvent::ContentBlockStart { index, content_block } => {
+                let tool_id = content_block.get("id").and_then(Value::as_str).map(String::from);
+                let tool_name = content_block.get("name").and_then(Value::as_str).map(String::from);
+                let kind = builder.on_block_start(index, content_block);
+                sink.send(AgentEvent::BlockStart { index, kind: kind.as_str(), tool_id, tool_name });
+            }
+            StreamEvent::ContentBlockDelta { index, delta } => {
+                builder.on_delta(index, &delta);
+                match &delta {
+                    sse::Delta::TextDelta { text } => sink.delta(index, text),
+                    sse::Delta::ThinkingDelta { thinking } => sink.delta(index, thinking),
+                    sse::Delta::InputJsonDelta { .. } => sink.progress(index, builder.json_len(index)),
+                    _ => {}
+                }
+            }
+            StreamEvent::ContentBlockStop { index } => {
+                builder.on_block_stop(index);
+                if let Some((tool_id, name, input)) = builder.tool_input(index) {
+                    let summary = tools::describe(&name, &input);
+                    sink.send(AgentEvent::ToolInput { index, tool_id, name, input, summary });
+                }
+            }
+            StreamEvent::MessageDelta { delta, usage } => builder.on_message_delta(delta, usage),
+            StreamEvent::MessageStop => builder.finished = true,
+            StreamEvent::Error { error } => return Err(StreamFail::Api(ApiError::Stream { kind: error.kind, message: error.message })),
+            StreamEvent::Ping | StreamEvent::Unknown => {}
+        }
+        Ok(())
+    }
+
+    async fn stream_once(&self, req: &Req, sink: &mut Sink) -> std::result::Result<AssistantTurn, StreamFail> {
         let mut resp = tokio::select! {
-            r = api::open_stream(&self.state.http, &base, &self.api_key, body, betas) => r.map_err(StreamFail::Api)?,
+            r = self.open(req) => r.map_err(StreamFail::Api)?,
             _ = self.cancel.cancelled() => return Err(StreamFail::Cancelled(Vec::new())),
         };
         let mut parser = SseParser::default();
         let mut builder = MessageBuilder::default();
+        let mut translator = req.openai.as_ref().map(|_| openai::Translator::default());
         let mut events = Vec::new();
+        let mut parsed = Vec::new();
         let mut tick = tokio::time::interval(Duration::from_millis(33));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -394,44 +472,27 @@ impl<'a, R: Runtime> Run<'a, R> {
                 if ev.data.is_empty() {
                     continue;
                 }
-                let Ok(parsed) = serde_json::from_str::<StreamEvent>(&ev.data) else { continue };
-                match parsed {
-                    StreamEvent::MessageStart { message } => {
-                        sink.send(AgentEvent::RequestStarted { model: message.model.clone() });
-                        builder.on_message_start(message);
-                    }
-                    StreamEvent::ContentBlockStart { index, content_block } => {
-                        let tool_id = content_block.get("id").and_then(Value::as_str).map(String::from);
-                        let tool_name = content_block.get("name").and_then(Value::as_str).map(String::from);
-                        let kind = builder.on_block_start(index, content_block);
-                        sink.send(AgentEvent::BlockStart { index, kind: kind.as_str(), tool_id, tool_name });
-                    }
-                    StreamEvent::ContentBlockDelta { index, delta } => {
-                        builder.on_delta(index, &delta);
-                        match &delta {
-                            sse::Delta::TextDelta { text } => sink.delta(index, text),
-                            sse::Delta::ThinkingDelta { thinking } => sink.delta(index, thinking),
-                            sse::Delta::InputJsonDelta { .. } => sink.progress(index, builder.json_len(index)),
-                            _ => {}
+                match translator.as_mut() {
+                    Some(t) => t.feed(&ev.data, &mut parsed).map_err(|m| StreamFail::Api(ApiError::Stream { kind: "provider_error".into(), message: m }))?,
+                    None => {
+                        if let Ok(p) = serde_json::from_str::<StreamEvent>(&ev.data) {
+                            parsed.push(p);
                         }
                     }
-                    StreamEvent::ContentBlockStop { index } => {
-                        builder.on_block_stop(index);
-                        if let Some((tool_id, name, input)) = builder.tool_input(index) {
-                            let summary = tools::describe(&name, &input);
-                            sink.send(AgentEvent::ToolInput { index, tool_id, name, input, summary });
-                        }
-                    }
-                    StreamEvent::MessageDelta { delta, usage } => builder.on_message_delta(delta, usage),
-                    StreamEvent::MessageStop => builder.finished = true,
-                    StreamEvent::Error { error } => {
-                        return Err(StreamFail::Api(ApiError::Stream { kind: error.kind, message: error.message }));
-                    }
-                    StreamEvent::Ping | StreamEvent::Unknown => {}
                 }
+            }
+            for p in parsed.drain(..) {
+                self.handle_event(p, &mut builder, sink)?;
             }
             if builder.finished {
                 break;
+            }
+        }
+        // Some OpenAI-compatible servers end the stream without `[DONE]`.
+        if let Some(t) = translator.as_mut().filter(|t| !t.finished()) {
+            t.finish_into(&mut parsed);
+            for p in parsed.drain(..) {
+                self.handle_event(p, &mut builder, sink)?;
             }
         }
         sink.flush();
@@ -603,6 +664,14 @@ impl<'a, R: Runtime> Run<'a, R> {
         sink.send(AgentEvent::ApprovalResolved { approval_id, tool_id: tool_id.to_string() });
         decision
     }
+}
+
+/// The request for one model turn.
+struct Req {
+    body: Value,
+    betas: Vec<&'static str>,
+    /// Set for OpenAI-compatible providers (OpenRouter, local).
+    openai: Option<openai::Endpoint>,
 }
 
 fn assistant_message(content: Vec<Value>, model: Option<String>) -> StoredMessage {

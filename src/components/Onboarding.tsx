@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Icon, Logo } from "./Icon";
 import { pickFolder } from "./chat/ChatPanel";
-import { MODELS } from "../lib/models";
+import { MODELS, providerReady } from "../lib/models";
 import { useApp } from "../store/app";
-import { api, errorText } from "../lib/ipc";
+import { ProviderPicker } from "./ProviderPicker";
 import { basename } from "../lib/util";
 import type { Effort, PermissionMode, Theme } from "../lib/types";
 
@@ -29,9 +29,6 @@ export function Onboarding() {
   const update = useApp.getState().updateSettings;
   const [step, setStep] = useState(0);
   const [dir, setDir] = useState<1 | -1>(1);
-  const [key, setKey] = useState("");
-  const [verifying, setVerifying] = useState(false);
-  const [keyMsg, setKeyMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const go = (n: number) => {
     setDir(n > step ? 1 : -1);
@@ -39,25 +36,8 @@ export function Onboarding() {
   };
   const finish = () => void update({ onboarded: true });
 
-  const saveKey = async () => {
-    setVerifying(true);
-    setKeyMsg(null);
-    try {
-      if (key.trim()) useApp.getState().setSettingsView(await api.setApiKey(key));
-      const models = await api.listModels();
-      setKeyMsg({ ok: true, text: `Connected — ${models.length} models available` });
-      setKey("");
-      window.setTimeout(() => go(2), 500);
-    } catch (e) {
-      setKeyMsg({ ok: false, text: errorText(e) });
-    } finally {
-      setVerifying(false);
-    }
-  };
-
   return (
     <div className="onboarding" data-testid="onboarding">
-      <div className="onb-glow" />
       <div className="onb-card">
         <div className="onb-steps">
           {STEPS.map((name, i) => (
@@ -92,29 +72,9 @@ export function Onboarding() {
 
           {step === 1 && (
             <div>
-              <h2>Connect Claude</h2>
-              <p className="lead">Paste an API key from console.anthropic.com. It's stored only on this machine, readable only by you.</p>
-              {s.hasApiKey && (
-                <div className="onb-ok">
-                  <Icon name="check" size={14} /> {s.apiKeySource === "env" ? "Using ANTHROPIC_API_KEY from your environment" : "A key is already saved"} ({s.apiKeyHint})
-                </div>
-              )}
-              <div className="onb-row">
-                <input
-                  className="input lg"
-                  type="password"
-                  autoFocus
-                  placeholder={s.hasApiKey ? "Paste a different key (optional)" : "sk-ant-…"}
-                  value={key}
-                  onChange={(e) => setKey(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && (key.trim() || s.hasApiKey) && void saveKey()}
-                  data-testid="onb-key"
-                />
-                <button className="btn primary lg" disabled={verifying || (!key.trim() && !s.hasApiKey)} onClick={() => void saveKey()}>
-                  {verifying ? <div className="spinner" /> : "Verify"}
-                </button>
-              </div>
-              {keyMsg && <div className={keyMsg.ok ? "onb-ok" : "onb-err"}>{keyMsg.text}</div>}
+              <h2>Connect a model</h2>
+              <p className="lead">Use Claude with an API key, any model through OpenRouter, or a model running on this machine.</p>
+              <ProviderPicker />
             </div>
           )}
 
@@ -122,14 +82,16 @@ export function Onboarding() {
             <div>
               <h2>Choose your defaults</h2>
               <p className="lead">You can switch model and effort any time from the composer.</p>
-              <div className="onb-grid two">
-                {MODELS.map((m) => (
-                  <button key={m.id} className={`onb-option${s.model === m.id ? " on" : ""}`} onClick={() => void update({ model: m.id })}>
-                    <b>Claude {m.label}</b>
-                    <span>{MODEL_INFO[m.id]}</span>
-                  </button>
-                ))}
-              </div>
+              {s.provider === "anthropic" && (
+                <div className="onb-grid two">
+                  {MODELS.map((m) => (
+                    <button key={m.id} className={`onb-option${s.model === m.id ? " on" : ""}`} onClick={() => void update({ model: m.id })}>
+                      <b>Claude {m.label}</b>
+                      <span>{MODEL_INFO[m.id]}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="onb-label">Thinking effort</div>
               <div className="segmented wide">
                 {(["low", "medium", "high", "xhigh", "max"] as Effort[]).map((e) => (
@@ -223,8 +185,8 @@ export function Onboarding() {
             <button
               className="btn primary"
               onClick={() => go(step + 1)}
-              disabled={step === 1 && !s.hasApiKey}
-              title={step === 1 && !s.hasApiKey ? "Add an API key first (or skip setup)" : undefined}
+              disabled={step === 1 && !providerReady(s)}
+              title={step === 1 && !providerReady(s) ? "Connect a provider first (or skip setup)" : undefined}
               data-testid="onb-next"
             >
               {step === 0 ? "Get started" : "Continue"} <Icon name="chevronRight" size={14} />

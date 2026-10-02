@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Icon, Logo } from "../Icon";
 import { MessageList } from "./MessageList";
@@ -7,7 +6,8 @@ import { PlanPanel } from "./PlanPanel";
 import { useChat } from "../../store/chat";
 import { useApp } from "../../store/app";
 import { useEditor } from "../../store/editor";
-import { api, errorText } from "../../lib/ipc";
+import { ProviderPicker } from "../ProviderPicker";
+import { providerReady } from "../../lib/models";
 import { basename, formatTokens } from "../../lib/util";
 
 export { MODELS } from "../../lib/models";
@@ -23,46 +23,13 @@ export async function pickFolder() {
   }
 }
 
-function ApiKeyCard() {
-  const [key, setKey] = useState("");
-  const [busy, setBusy] = useState(false);
-  const save = async () => {
-    if (!key.trim()) return;
-    setBusy(true);
-    try {
-      useApp.getState().setSettingsView(await api.setApiKey(key));
-      try {
-        await api.listModels();
-        useApp.getState().toast("API key saved and verified");
-      } catch (e) {
-        useApp.getState().toast(`Key saved, but verification failed: ${errorText(e)}`, "error");
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
+function ConnectCard() {
   return (
-    <div className="suggestion" style={{ maxWidth: 520, width: "100%", cursor: "default" }}>
+    <div className="connect-card">
       <b>
-        <Icon name="key" size={13} /> Connect Claude
+        <Icon name="key" size={13} /> Connect a model
       </b>
-      <div style={{ margin: "6px 0 10px" }}>
-        Paste an Anthropic API key (from console.anthropic.com). It's stored in your config folder, readable only by you.
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <input
-          className="input"
-          type="password"
-          placeholder="sk-ant-…"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && void save()}
-          data-testid="welcome-api-key"
-        />
-        <button className="btn primary" disabled={busy || !key.trim()} onClick={() => void save()}>
-          Save
-        </button>
-      </div>
+      <ProviderPicker />
     </div>
   );
 }
@@ -78,7 +45,7 @@ const SUGGESTIONS = [
 
 function EmptyChat({ docked }: { docked: boolean }) {
   const workspace = useApp((s) => s.workspace);
-  const hasKey = useApp((s) => s.settings?.hasApiKey ?? false);
+  const hasKey = useApp((s) => (s.settings ? providerReady(s.settings) : false));
   const recents = useApp((s) => s.settings?.recentWorkspaces ?? NO_RECENTS);
   const setComposer = useChat((s) => s.setComposer);
   return (
@@ -95,8 +62,8 @@ function EmptyChat({ docked }: { docked: boolean }) {
           </>
         )}
       </h1>
-      {!workspace && <p>An AI code editor powered by Claude. Open a project folder and PiLunch can read, edit and run your code — always asking first.</p>}
-      {!hasKey && <ApiKeyCard />}
+      {!workspace && <p>An AI code editor for Claude, OpenRouter and local models. Open a project folder and PiLunch can read, edit and run your code — always asking first.</p>}
+      {!hasKey && <ConnectCard />}
       {!workspace && (
         <>
           <div className="actions">

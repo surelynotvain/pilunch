@@ -5,7 +5,7 @@ import { useApp } from "../../store/app";
 import { api } from "../../lib/ipc";
 import { basename, dirname } from "../../lib/util";
 import type { Effort, FileMatch, PermissionMode } from "../../lib/types";
-import { EFFORTS, MODELS } from "../../lib/models";
+import { EFFORTS, MODELS, activeModel, modelPatch, providerReady } from "../../lib/models";
 
 const MODES: { id: PermissionMode; label: string; title: string }[] = [
   { id: "ask", label: "Ask before edits", title: "Claude asks before every file edit and command" },
@@ -29,8 +29,19 @@ export function Composer({ convId }: { convId: string | null }) {
   const { setComposer, send, cancel } = useChat.getState();
   const workspace = useApp((s) => s.workspace);
   const mode = useApp((s) => s.settings?.permissionMode ?? "ask");
-  const hasKey = useApp((s) => s.settings?.hasApiKey ?? false);
-  const model = useApp((s) => s.settings?.model ?? "");
+  const hasKey = useApp((s) => (s.settings ? providerReady(s.settings) : false));
+  const provider = useApp((s) => s.settings?.provider ?? "anthropic");
+  const model = useApp((s) => (s.settings ? activeModel(s.settings) : ""));
+  const [remote, setRemote] = useState<{ id: string; label: string }[] | null>(null);
+  useEffect(() => setRemote(null), [provider]);
+  const loadRemote = () => {
+    if (provider === "anthropic" || remote) return;
+    api.listModels(provider).then(
+      (ms) => setRemote(ms.map((m) => ({ id: m.id, label: m.displayName }))),
+      () => setRemote([]),
+    );
+  };
+  const choices = provider === "anthropic" ? MODELS : (remote ?? []);
   const effort = useApp((s) => s.settings?.effort ?? "high");
   const ta = useRef<HTMLTextAreaElement>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
@@ -121,7 +132,7 @@ export function Composer({ convId }: { convId: string | null }) {
 
   const canSend = !running && composer.text.trim().length > 0;
   const placeholder = !hasKey
-    ? "Add your Anthropic API key in Settings to start…"
+    ? "Connect a model provider in Settings to start…"
     : workspace
       ? `Ask PiLunch to build, fix or explain anything in ${workspace.name}…  (@ to mention files)`
       : "Ask anything… (open a folder to let PiLunch work on code)";
@@ -222,10 +233,12 @@ export function Composer({ convId }: { convId: string | null }) {
             className="pill-select"
             value={model}
             title="Model"
-            onChange={(e) => void useApp.getState().updateSettings({ model: e.target.value })}
+            onChange={(e) => void useApp.getState().updateSettings(modelPatch(provider, e.target.value))}
+            onMouseDown={loadRemote}
+            onFocus={loadRemote}
             data-testid="model-select"
           >
-            {(MODELS.some((m) => m.id === model) ? MODELS : [...MODELS, { id: model, label: model }]).map((m) => (
+            {(choices.some((m) => m.id === model) ? choices : [{ id: model, label: model || "No model" }, ...choices]).map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
               </option>

@@ -23,7 +23,13 @@ The core is written in **Rust** (Tauri 2) and the UI in **TypeScript** (React + 
   - **Run:** `run_command`
   - **Web:** `web_fetch`, plus Anthropic's built-in `web_search` (optional)
   - **Plan:** `todo_write`, shown as a live checklist above the composer
-- **Guided setup.** A first-run wizard connects your API key, then picks the model, effort, theme and permission mode, and opens a project.
+- **Bring your own model.** Connect one of three providers:
+  - **Anthropic**: Claude with an API key, with adaptive thinking, prompt caching and web search.
+  - **OpenRouter**: one key for Claude, GPT, Gemini, Grok, DeepSeek, Qwen and hundreds more. Pick the model from a live list.
+  - **Local**: any OpenAI-compatible server (Ollama, LM Studio, vLLM, llama.cpp). Nothing leaves your machine.
+
+  All three providers run the same tools and approval flow.
+- **Guided setup.** A first-run wizard connects a provider, then picks the model, effort, theme and permission mode, and opens a project.
 - **You stay in control.** Every edit is shown as a diff and every command as text before it runs. You can **Apply**, **Allow for this chat**, or **Deny** with feedback ("use a markdown file instead"), and Claude adjusts. There are four permission modes: *Ask*, *Auto-accept edits*, *Plan* (read-only) and *Bypass*.
 - **A real editor.** Monaco (the editor inside VS Code) with tabs, syntax highlighting for 80+ languages, minimap and sticky scroll. Files the agent changes reload live, and unsaved work is never overwritten.
 - **Project tools.** A gitignore-aware explorer with git status colors, ripgrep-powered search, fuzzy quick-open (`Ctrl+P`), a command palette (`Ctrl+Shift+P`) and an integrated terminal with real PTYs.
@@ -71,11 +77,14 @@ Run `npm run app:build` on Windows. It produces an `.msi` and an NSIS `.exe` ins
 
 ## Getting started
 
-1. Start PiLunch and paste your Anthropic API key, from [console.anthropic.com](https://console.anthropic.com), into the welcome screen. You can also open **Settings** (`Ctrl+,`), or set `ANTHROPIC_API_KEY` in your environment.
+1. Start PiLunch and connect a provider in the setup wizard. You can change it later in **Settings** (`Ctrl+,`).
+   - **Anthropic**: paste a key from [console.anthropic.com](https://console.anthropic.com), or set `ANTHROPIC_API_KEY`.
+   - **OpenRouter**: paste a key from [openrouter.ai/keys](https://openrouter.ai/keys), or set `OPENROUTER_API_KEY`, then pick a model.
+   - **Local**: start your server (for example `ollama serve`), check the URL (default `http://localhost:11434/v1`), and pick a model. Pick one that supports tool calling, such as Qwen3-Coder or GPT-OSS.
 2. Click **Open Folder** and choose a project.
 3. Ask for something, for example: *"Find why the tests fail and fix it."*
 
-The default model is **Claude Opus 5.5** at *high* effort. You can switch to Sonnet 5.5 (faster), Fable 5.1 (most capable) or Haiku 4.5 (quickest) from the chat header, or type any model id in Settings.
+With Anthropic, the default model is **Claude Opus 5.5** at *high* effort. You can switch models from the composer for any provider. Effort maps to reasoning effort on OpenRouter and local servers.
 
 ## Keyboard shortcuts
 
@@ -99,7 +108,7 @@ The default model is **Claude Opus 5.5** at *high* effort. You can switch to Son
 - **Workspace sandbox.** Every file path from the UI or the agent goes through one resolver in Rust (`src-tauri/src/workspace.rs`). It rejects `..` escapes, absolute paths outside the folder, and symlinks that point outside.
 - **Approvals happen in Rust.** In *Ask* mode, an edit or command doesn't run until you approve it. An edit is re-checked before writing: if the file changed after the diff was shown, the write is refused.
 - **Commands** run in the project folder with no stdin, a timeout (120 s by default, 600 s max), and their own process group, so cancelling or timing out kills the whole process tree.
-- **Your API key** is stored in `~/.config/pilunch/secrets.json` with `0600` permissions. It is never sent to the web view; the UI only sees whether a key is set and its last four characters.
+- **API keys** are stored in `~/.config/pilunch/secrets.json` with `0600` permissions and only sent to their own provider. They are never sent to the web view; the UI only sees whether a key is set.
 - **The web view** runs under a strict Content Security Policy with no remote scripts. Markdown is rendered without raw HTML.
 
 ## Building from source
@@ -137,8 +146,9 @@ The end-to-end test needs `tauri-driver` (`cargo install tauri-driver`), `WebKit
 
 ```
 src-tauri/src/            Rust core
-  agent/                  Claude agent: api.rs (HTTP + request options), sse.rs (stream parsing),
-                          tools.rs (tool definitions and implementations), prompt.rs, mod.rs (the loop)
+  agent/                  the agent: api.rs (Anthropic HTTP + request options), sse.rs (stream parsing),
+                          openai.rs (OpenRouter/local: OpenAI-compatible requests translated into the same events),
+                          tools.rs + toolbox.rs (tools), prompt.rs, mod.rs (the loop)
   workspace.rs            path sandbox
   search.rs               file index, fuzzy matching, grep
   fs_ops.rs  git.rs  terminal.rs  watcher.rs  settings.rs  conversations.rs  commands.rs
@@ -152,14 +162,14 @@ e2e/                      WebDriver end-to-end test + mock Messages API
 
 | What | Linux | Windows |
 |---|---|---|
-| Settings, API key | `~/.config/pilunch/` | `%APPDATA%\pilunch\` |
+| Settings, API keys | `~/.config/pilunch/` | `%APPDATA%\pilunch\` |
 | Chat history | `~/.local/share/pilunch/conversations/` | `%APPDATA%\pilunch\conversations\` |
 
 You can override these with `PILUNCH_CONFIG_DIR` and `PILUNCH_DATA_DIR`.
 
 ## Not there yet
 
-- Claude (the Anthropic API) is the only provider. There is no OpenAI or local-model support yet.
+- No sign-in with a Claude or ChatGPT subscription account. Use an API key, OpenRouter or a local model.
 - No language-server integration (go-to-definition, project-wide type checking).
 - There are no agent checkpoints: undo the agent's changes with the editor's undo or with git.
 - The Windows build is set up but has not been tested as thoroughly as Linux.

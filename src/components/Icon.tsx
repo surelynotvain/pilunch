@@ -137,6 +137,12 @@ const P: Record<string, ReactNode> = {
       <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
     </>
   ),
+  cpu: (
+    <>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+      <path d="M10 10h4v4h-4zM9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
+    </>
+  ),
   collapse: <path d="m7 15 5-5 5 5M7 20h10M7 4h10" />,
 };
 
@@ -168,24 +174,14 @@ export function Icon({ name, size = 16, className, style, title }: { name: IconN
 export function Logo({ size = 28 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="64 64 896 896" aria-hidden className="logo-mark">
-      <defs>
-        <linearGradient id="pl-tile" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#2a2a31" />
-          <stop offset="1" stopColor="#0e0e11" />
-        </linearGradient>
-        <linearGradient id="pl-cursor" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#8b8bff" />
-          <stop offset="1" stopColor="#5b4cf0" />
-        </linearGradient>
-      </defs>
-      <rect x="64" y="64" width="896" height="896" rx="216" fill="url(#pl-tile)" />
+      <rect x="64" y="64" width="896" height="896" rx="216" fill="#16161a" />
       <rect x="68" y="68" width="888" height="888" rx="212" fill="none" stroke="#fff" strokeOpacity="0.12" strokeWidth="8" />
       <g fill="#f4f4f6">
         <rect x="226" y="300" width="572" height="84" rx="42" />
         <path d="M372 384 h84 v220 c0 64 -16 112 -52 158 a42 42 0 0 1 -66 -52 c22 -28 34 -60 34 -106 z" />
         <path d="M568 384 h84 v314 a42 42 0 0 1 -84 0 z" />
       </g>
-      <rect className="logo-cursor" x="694" y="676" width="104" height="64" rx="16" fill="url(#pl-cursor)" />
+      <rect className="logo-cursor" x="694" y="676" width="104" height="64" rx="16" fill="#7c7cff" />
     </svg>
   );
 }

@@ -386,3 +386,40 @@ fn invalid_streamed_tool_json_is_returned_as_error() {
     assert!(result["content"].as_str().unwrap().contains("INVALID_JSON"));
     assert!(!h.ws.path().join("a.txt").exists());
 }
+
+fn oa_sse(chunks: &[Value]) -> String {
+    let mut s: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
+    s.push_str("data: [DONE]\n\n");
+    s
+}
+
+#[test]
+fn local_openai_compatible_provider_runs_tools() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (addr, recorded) = rt.block_on(mock_api(vec![
+        MockResp::Sse(oa_sse(&[
+            json!({"model":"qwen3-coder","choices":[{"delta":{"reasoning_content":"look at main"}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"main.rs\"}"}}]},"finish_reason":"tool_calls"}]}),
+        ])),
+        MockResp::Sse(oa_sse(&[json!({"choices":[{"delta":{"content":"It has a main fn."},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":6}})])),
+    ]));
+    let h = harness("http://unused", "ask");
+    h.app.state::<AppState>().settings.update(json!({"provider":"local","localBaseUrl": format!("{addr}/v1"),"localModel":"qwen3-coder"})).unwrap();
+    let events = run_message(&h, "what is in main.rs?", |_| unreachable!("read tools never ask"));
+    assert_eq!(events.last().unwrap()["stopReason"], "end_turn", "{events:?}");
+    let reqs = recorded.lock().unwrap().clone();
+    assert_eq!(reqs.len(), 2);
+    assert!(reqs[0].headers.starts_with("post /v1/chat/completions"), "{}", reqs[0].headers);
+    assert_eq!(reqs[0].body["model"], "qwen3-coder");
+    assert_eq!(reqs[0].body["messages"][0]["role"], "system");
+    assert!(reqs[0].body["tools"].as_array().unwrap().iter().all(|t| t["type"] == "function"));
+    let second = reqs[1].body["messages"].as_array().unwrap().clone();
+    let n = second.len();
+    assert_eq!(second[n - 2]["tool_calls"][0]["id"], "call_a");
+    assert_eq!(second[n - 1]["role"], "tool");
+    assert!(second[n - 1]["content"].as_str().unwrap().contains("fn main()"));
+    let conv = h.app.state::<AppState>().conversations.get(&h.conv_id).unwrap();
+    assert_eq!(conv.tool_ui["call_a"].status, ToolStatus::Done);
+    assert!(conv.api_messages().iter().all(|m| m["content"].as_array().unwrap().iter().all(|b| b["type"] != "thinking")));
+}

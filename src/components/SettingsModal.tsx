@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import { MODELS } from "../lib/models";
 import { useApp } from "../store/app";
-import { api, errorText } from "../lib/ipc";
-import type { Effort, ModelInfo, PermissionMode, Settings, Theme } from "../lib/types";
+import { ProviderPicker } from "./ProviderPicker";
+import type { Effort, PermissionMode, Settings, Theme } from "../lib/types";
 
 function Switch({ on, onChange, testId }: { on: boolean; onChange: (v: boolean) => void; testId?: string }) {
   return <button className={`switch${on ? " on" : ""}`} onClick={() => onChange(!on)} role="switch" aria-checked={on} data-testid={testId} />;
@@ -29,10 +29,6 @@ export function SettingsModal() {
   const s = useApp((st) => st.settings);
   const close = () => useApp.getState().setOverlay(null);
   const update = (patch: Partial<Settings>) => void useApp.getState().updateSettings(patch);
-  const [key, setKey] = useState("");
-  const [testing, setTesting] = useState(false);
-  const [models, setModels] = useState<ModelInfo[] | null>(null);
-  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [instructions, setInstructions] = useState(s?.customInstructions ?? "");
 
   useEffect(() => {
@@ -43,32 +39,7 @@ export function SettingsModal() {
 
   if (!s) return null;
 
-  const saveKey = async () => {
-    try {
-      useApp.getState().setSettingsView(await api.setApiKey(key));
-      setKey("");
-      await test();
-    } catch (e) {
-      setTestMsg({ ok: false, text: errorText(e) });
-    }
-  };
-
-  const test = async () => {
-    setTesting(true);
-    setTestMsg(null);
-    try {
-      const list = await api.listModels();
-      setModels(list);
-      setTestMsg({ ok: true, text: `Connected — ${list.length} models available` });
-    } catch (e) {
-      setTestMsg({ ok: false, text: errorText(e) });
-    } finally {
-      setTesting(false);
-    }
-  };
-
   const modelOptions = [...MODELS];
-  for (const m of models ?? []) if (!modelOptions.some((x) => x.id === m.id)) modelOptions.push({ id: m.id, label: m.displayName });
   if (!modelOptions.some((m) => m.id === s.model)) modelOptions.push({ id: s.model, label: s.model });
 
   return (
@@ -83,66 +54,35 @@ export function SettingsModal() {
         </div>
         <div className="modal-body">
           <div className="settings-section">
-            <h3>Claude</h3>
-            <div className="field">
-              <label>
-                API key
-                <span className="help">
-                  {s.hasApiKey ? (
-                    <span className="key-status ok">
-                      <Icon name="check" size={12} /> {s.apiKeySource === "env" ? "From ANTHROPIC_API_KEY" : "Saved"} {s.apiKeyHint}
-                    </span>
-                  ) : (
-                    "Not configured"
-                  )}
-                </span>
-              </label>
-              <div>
+            <h3>Model provider</h3>
+            <ProviderPicker />
+            <span className="help">Keys are stored in {s.configDir}/secrets.json (owner-only permissions) and only sent to their provider.</span>
+          </div>
+
+          <div className="settings-section">
+            <h3>Model</h3>
+            {s.provider === "anthropic" && (
+              <div className="field">
+                <label>
+                  Model
+                  <span className="help">Opus for the hardest work, Sonnet for speed, Haiku for quick answers.</span>
+                </label>
                 <div className="row">
-                  <input
-                    className="input"
-                    type="password"
-                    placeholder={s.hasApiKey ? "Enter a new key to replace it" : "sk-ant-…"}
-                    value={key}
-                    onChange={(e) => setKey(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && key.trim() && void saveKey()}
-                    data-testid="settings-api-key"
-                  />
-                  <button className="btn primary" disabled={!key.trim()} onClick={() => void saveKey()}>
-                    Save
-                  </button>
-                  <button className="btn" disabled={!s.hasApiKey || testing} onClick={() => void test()}>
-                    {testing ? <div className="spinner" /> : "Test"}
-                  </button>
+                  <select className="select" value={s.model} onChange={(e) => update({ model: e.target.value })}>
+                    {modelOptions.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                  <Lazy value={s.model} onSave={(v) => v.trim() && update({ model: v.trim() })} placeholder="custom model id" style={{ maxWidth: 200 }} />
                 </div>
-                {testMsg && (
-                  <span className="help" style={{ color: testMsg.ok ? "var(--ok)" : "var(--err)" }}>
-                    {testMsg.text}
-                  </span>
-                )}
-                <span className="help">Stored in {s.configDir}/secrets.json (owner-only permissions). It never leaves this machine except to the API.</span>
               </div>
-            </div>
-            <div className="field">
-              <label>
-                Model
-                <span className="help">Opus for the hardest work, Sonnet for speed, Haiku for quick answers.</span>
-              </label>
-              <div className="row">
-                <select className="select" value={s.model} onChange={(e) => update({ model: e.target.value })}>
-                  {modelOptions.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-                <Lazy value={s.model} onSave={(v) => v.trim() && update({ model: v.trim() })} placeholder="custom model id" style={{ maxWidth: 200 }} />
-              </div>
-            </div>
+            )}
             <div className="field">
               <label>
                 Effort
-                <span className="help">How hard Claude thinks. Higher is smarter but slower and costs more.</span>
+                <span className="help">How hard the model thinks. Higher is smarter but slower and costs more.</span>
               </label>
               <select className="select" value={s.effort} onChange={(e) => update({ effort: e.target.value as Effort })}>
                 <option value="low">Low — fastest</option>
@@ -152,13 +92,15 @@ export function SettingsModal() {
                 <option value="max">Max</option>
               </select>
             </div>
-            <div className="field">
-              <label>
-                Web search
-                <span className="help">Let Claude search the web for docs and answers (Anthropic bills per search).</span>
-              </label>
-              <Switch on={s.webSearch} onChange={(v) => update({ webSearch: v })} />
-            </div>
+            {s.provider === "anthropic" && (
+              <div className="field">
+                <label>
+                  Web search
+                  <span className="help">Let Claude search the web for docs and answers (Anthropic bills per search).</span>
+                </label>
+                <Switch on={s.webSearch} onChange={(v) => update({ webSearch: v })} />
+              </div>
+            )}
             <div className="field">
               <label>Show thinking</label>
               <Switch on={s.showThinking} onChange={(v) => update({ showThinking: v })} />
@@ -170,13 +112,15 @@ export function SettingsModal() {
               </label>
               <Lazy value={String(s.maxTokens)} onSave={(v) => Number(v) > 0 && update({ maxTokens: Number(v) })} inputMode="numeric" />
             </div>
-            <div className="field">
-              <label>
-                API endpoint
-                <span className="help">Only change this for a proxy or gateway.</span>
-              </label>
-              <Lazy value={s.baseUrl} onSave={(v) => update({ baseUrl: v.trim() })} placeholder="https://api.anthropic.com" />
-            </div>
+            {s.provider === "anthropic" && (
+              <div className="field">
+                <label>
+                  API endpoint
+                  <span className="help">Only change this for a proxy or gateway.</span>
+                </label>
+                <Lazy value={s.baseUrl} onSave={(v) => update({ baseUrl: v.trim() })} placeholder="https://api.anthropic.com" />
+              </div>
+            )}
           </div>
 
           <div className="settings-section">

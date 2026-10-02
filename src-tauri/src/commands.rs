@@ -42,15 +42,41 @@ pub struct ModelInfo {
     display_name: String,
 }
 
-/// Validates the API key and returns the models it can use.
+/// Validates the active provider's credentials and returns the models it can use.
 #[tauri::command]
-pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>> {
-    let key = state.settings.api_key().ok_or_else(|| Error::msg("No API key configured"))?;
-    let base = state.settings.get().api_base();
-    agent::api::list_models(&state.http, &base, &key)
-        .await
-        .map(|v| v.into_iter().map(|(id, display_name)| ModelInfo { id, display_name }).collect())
-        .map_err(|e| Error::msg(e.user_message()))
+pub async fn list_models(state: State<'_, AppState>, provider: Option<String>) -> Result<Vec<ModelInfo>> {
+    let mut settings = state.settings.get();
+    if let Some(p) = provider {
+        settings.provider = p;
+    }
+    let to_info = |v: Vec<(String, String)>| v.into_iter().map(|(id, display_name)| ModelInfo { id, display_name }).collect();
+    match settings.provider.as_str() {
+        "openrouter" | "local" => {
+            let ep = agent::openai::Endpoint::for_settings(&settings, state.settings.openrouter_key(), state.settings.local_key()).expect("openai provider");
+            let resp = ep
+                .request(&state.http, reqwest::Method::GET, "/models")
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await
+                .map_err(|e| Error::msg(format!("Can't reach {}: {}", ep.base, agent::api::describe_reqwest(&e))))?;
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(Error::msg(format!("{status}: {}", agent::openai::error_message(&text))));
+            }
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| Error::msg(format!("unexpected response: {e}")))?;
+            Ok(to_info(agent::openai::parse_models(&v)))
+        }
+        _ => {
+            let key = state.settings.api_key().ok_or_else(|| Error::msg("No API key configured"))?;
+            agent::api::list_models(&state.http, &settings.api_base(), &key).await.map(to_info).map_err(|e| Error::msg(e.user_message()))
+        }
+    }
+}
+
+#[tauri::command]
+pub fn set_provider_key(state: State<'_, AppState>, provider: String, key: String) -> Result<SettingsView> {
+    state.settings.set_secret(&provider, key)
 }
 
 // ---- workspace ----------------------------------------------------------------------

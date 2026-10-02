@@ -18,7 +18,6 @@
   --accent-2: #f59e6b;
   --accent-soft: rgba(124, 124, 255, 0.14);
   --accent-text: #a5a5ff;
-  --grad: linear-gradient(135deg, #a5a5ff 0%, #6d5cf6 100%);
   --ok: #34d399;
   --warn: #fbbf24;
   --err: #f87171;
@@ -313,7 +312,7 @@ button {
   bottom: 9px;
   width: 3px;
   border-radius: 3px;
-  background: var(--grad);
+  background: var(--accent);
 }
 .activity .spacer {
   flex: 1;
@@ -708,7 +707,7 @@ button {
   right: 0;
   top: 0;
   height: 2px;
-  background: var(--grad);
+  background: var(--accent);
 }
 .tab .close {
   width: 18px;
@@ -1106,19 +1105,12 @@ button {
   overflow: auto;
 }
 .shimmer {
-  background: linear-gradient(90deg, var(--text-3) 0%, var(--text) 50%, var(--text-3) 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmer 1.6s linear infinite;
+  color: var(--text-2);
+  animation: shimmer 1.4s ease-in-out infinite;
 }
 @keyframes shimmer {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: -100% 0;
+  50% {
+    opacity: 0.45;
   }
 }
 
@@ -1343,7 +1335,7 @@ button {
   border: 0;
   display: grid;
   place-items: center;
-  background: var(--grad);
+  background: var(--accent);
   color: #fff;
   cursor: pointer;
 }
@@ -1396,10 +1388,7 @@ button {
   letter-spacing: -0.01em;
 }
 .welcome h1 .grad {
-  background: var(--grad);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--accent-text);
 }
 .welcome p {
   margin: 0;
@@ -2228,17 +2217,6 @@ body {
   overflow: auto;
   animation: fade-in 0.35s ease-out;
 }
-.onb-glow {
-  position: absolute;
-  width: 900px;
-  height: 900px;
-  left: 50%;
-  top: -420px;
-  transform: translateX(-50%);
-  background: radial-gradient(closest-side, rgba(124, 124, 255, 0.16), transparent 70%);
-  pointer-events: none;
-  animation: glow 8s ease-in-out infinite alternate;
-}
 .onb-card {
   position: relative;
   width: min(640px, 92vw);
@@ -2534,7 +2512,7 @@ body {
 .plan-progress span {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--ok));
+  background: var(--accent);
   transition: width 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .plan-panel ul {
@@ -2755,5 +2733,98 @@ body {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+/* provider picker */
+.provider-picker {
+  display: grid;
+  gap: 12px;
+}
+.provider-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.provider-card {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  text-align: left;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.provider-card:hover {
+  border-color: var(--border-strong, var(--text-3));
+}
+.provider-card.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.provider-card b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+}
+.provider-card b svg {
+  color: var(--ok);
+}
+.provider-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--bg-3);
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.provider-card.on .provider-icon {
+  color: var(--accent-text);
+}
+.provider-body {
+  display: grid;
+  gap: 8px;
+  animation: fade-in 0.2s ease-out;
+}
+.provider-body .onb-label {
+  margin: 4px 0 0;
+}
+.provider-picker + .help {
+  display: block;
+  margin-top: 10px;
+}
+.provider-help {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.connect-card {
+  width: 100%;
+  max-width: 560px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  text-align: left;
+}
+.connect-card > b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 560px) {
+  .provider-cards {
+    grid-template-columns: 1fr;
   }
 }

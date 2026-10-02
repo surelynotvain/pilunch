@@ -48,6 +48,12 @@ pub struct Settings {
     pub web_search: bool,
     /// The first-run setup has been completed.
     pub onboarded: bool,
+    /// anthropic | openrouter | local
+    pub provider: String,
+    pub openrouter_model: String,
+    /// OpenAI-compatible server for local models (Ollama, LM Studio, vLLM, llama.cpp…).
+    pub local_base_url: String,
+    pub local_model: String,
 }
 
 impl Default for Settings {
@@ -68,6 +74,10 @@ impl Default for Settings {
             recent_workspaces: Vec::new(),
             web_search: false,
             onboarded: false,
+            provider: "anthropic".into(),
+            openrouter_model: "openrouter/auto".into(),
+            local_base_url: "http://localhost:11434/v1".into(),
+            local_model: String::new(),
         }
     }
 }
@@ -84,10 +94,12 @@ impl Settings {
     }
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase", default)]
 struct Secrets {
     anthropic_api_key: String,
+    openrouter_api_key: String,
+    local_api_key: String,
 }
 
 /// What the UI sees: settings plus API-key status (never the key itself).
@@ -100,6 +112,8 @@ pub struct SettingsView {
     /// "settings" | "env"
     pub api_key_source: Option<&'static str>,
     pub api_key_hint: Option<String>,
+    pub has_openrouter_key: bool,
+    pub has_local_key: bool,
     pub config_dir: String,
 }
 
@@ -107,6 +121,7 @@ pub struct SettingsStore {
     dir: PathBuf,
     settings: RwLock<Settings>,
     api_key: RwLock<String>,
+    secrets: RwLock<Secrets>,
 }
 
 impl SettingsStore {
@@ -115,12 +130,12 @@ impl SettingsStore {
             .ok()
             .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
             .unwrap_or_default();
-        let api_key = std::fs::read(dir.join("secrets.json"))
+        let secrets = std::fs::read(dir.join("secrets.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<Secrets>(&b).ok())
-            .map(|s| s.anthropic_api_key)
             .unwrap_or_default();
-        Self { dir, settings: RwLock::new(settings), api_key: RwLock::new(api_key) }
+        let api_key = secrets.anthropic_api_key.clone();
+        Self { dir, settings: RwLock::new(settings), api_key: RwLock::new(api_key), secrets: RwLock::new(secrets) }
     }
 
     pub fn get(&self) -> Settings {
@@ -158,6 +173,9 @@ impl SettingsStore {
                 let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
                 format!("…{tail}")
             }),
+            has_openrouter_key: !self.secrets.read().unwrap().openrouter_api_key.trim().is_empty()
+                || std::env::var("OPENROUTER_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
+            has_local_key: !self.secrets.read().unwrap().local_api_key.trim().is_empty(),
             config_dir: self.dir.display().to_string(),
         }
     }
@@ -195,10 +213,38 @@ impl SettingsStore {
     }
 
     pub fn set_api_key(&self, key: String) -> Result<SettingsView> {
-        *self.api_key.write().unwrap() = key.trim().to_string();
-        let secrets = Secrets { anthropic_api_key: self.api_key.read().unwrap().clone() };
-        write_private(&self.dir.join("secrets.json"), &serde_json::to_vec_pretty(&secrets)?)?;
+        self.set_secret("anthropic", key)
+    }
+
+    /// Store a provider secret: "anthropic" | "openrouter" | "local".
+    pub fn set_secret(&self, provider: &str, key: String) -> Result<SettingsView> {
+        let key = key.trim().to_string();
+        {
+            let mut s = self.secrets.write().unwrap();
+            match provider {
+                "anthropic" => {
+                    s.anthropic_api_key = key.clone();
+                    *self.api_key.write().unwrap() = key;
+                }
+                "openrouter" => s.openrouter_api_key = key,
+                "local" => s.local_api_key = key,
+                other => return Err(Error::msg(format!("unknown provider {other}"))),
+            }
+            write_private(&self.dir.join("secrets.json"), &serde_json::to_vec_pretty(&*s)?)?;
+        }
         Ok(self.view())
+    }
+
+    pub fn openrouter_key(&self) -> Option<String> {
+        let k = self.secrets.read().unwrap().openrouter_api_key.trim().to_string();
+        if !k.is_empty() {
+            return Some(k);
+        }
+        std::env::var("OPENROUTER_API_KEY").ok().filter(|k| !k.trim().is_empty())
+    }
+
+    pub fn local_key(&self) -> Option<String> {
+        Some(self.secrets.read().unwrap().local_api_key.trim().to_string()).filter(|k| !k.is_empty())
     }
 
     fn save(&self) -> Result<()> {

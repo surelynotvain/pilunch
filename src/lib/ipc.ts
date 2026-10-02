@@ -2,6 +2,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AgentEvent,
+  Provider,
   Conversation,
   ConversationMeta,
   Decision,
@@ -22,7 +23,8 @@ export const api = {
   getSettings: () => invoke<SettingsView>("get_settings"),
   updateSettings: (patch: Partial<Settings>) => invoke<SettingsView>("update_settings", { patch }),
   setApiKey: (key: string) => invoke<SettingsView>("set_api_key", { key }),
-  listModels: () => invoke<ModelInfo[]>("list_models"),
+  listModels: (provider?: Provider) => invoke<ModelInfo[]>("list_models", { provider: provider ?? null }),
+  setProviderKey: (provider: "anthropic" | "openrouter" | "local", key: string) => invoke<SettingsView>("set_provider_key", { provider, key }),
 
   // workspace
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),

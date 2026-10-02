@@ -20,12 +20,20 @@ export interface Settings {
   recentWorkspaces: string[];
   webSearch: boolean;
   onboarded: boolean;
+  provider: Provider;
+  openrouterModel: string;
+  localBaseUrl: string;
+  localModel: string;
 }
+
+export type Provider = "anthropic" | "openrouter" | "local";
 
 export interface SettingsView extends Settings {
   hasApiKey: boolean;
   apiKeySource: "settings" | "env" | null;
   apiKeyHint: string | null;
+  hasOpenrouterKey: boolean;
+  hasLocalKey: boolean;
   configDir: string;
 }
 

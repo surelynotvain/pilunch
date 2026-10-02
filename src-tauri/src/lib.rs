@@ -34,6 +34,7 @@ pub fn run() {
             commands::update_settings,
             commands::set_api_key,
             commands::list_models,
+            commands::set_provider_key,
             commands::open_workspace,
             commands::close_workspace,
             commands::current_workspace,

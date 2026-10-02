@@ -326,6 +326,12 @@ try {
     await waitEl("[data-testid=settings]");
     await sleep(200);
     await shot("settings");
+    // switching provider shows its own setup and is reflected in the status bar
+    await click("[data-testid=provider-local]");
+    await waitEl("[data-testid=local-url]");
+    await waitFor("status bar shows local", async () => (await textOf("[data-testid=statusbar]"))?.includes("Local"));
+    await click("[data-testid=provider-anthropic]");
+    await waitFor("status bar shows anthropic", async () => (await textOf("[data-testid=statusbar]"))?.includes("Anthropic"));
     await exec(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
   });
 

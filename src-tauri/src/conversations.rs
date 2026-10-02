@@ -101,7 +101,16 @@ impl Conversation {
     pub fn api_messages(&self) -> Vec<Value> {
         self.messages
             .iter()
-            .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+            .filter_map(|m| {
+                // Thinking without a signature (from local / OpenRouter models) can't be
+                // replayed to the Anthropic API; drop it.
+                let content: Vec<&Value> = m
+                    .content
+                    .iter()
+                    .filter(|b| b.get("type").and_then(Value::as_str) != Some("thinking") || b.get("signature").and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
+                    .collect();
+                (!content.is_empty()).then(|| serde_json::json!({ "role": m.role, "content": content }))
+            })
             .collect()
     }
 }

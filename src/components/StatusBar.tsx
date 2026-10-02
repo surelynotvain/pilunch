@@ -3,6 +3,7 @@ import { useApp } from "../store/app";
 import { useChat } from "../store/chat";
 import { useEditor } from "../store/editor";
 import { formatTokens } from "../lib/util";
+import { PROVIDER_LABEL, activeModel } from "../lib/models";
 
 const MODE_LABEL = { ask: "Ask", acceptEdits: "Auto-edit", plan: "Plan", bypass: "Bypass" } as const;
 
@@ -62,7 +63,7 @@ export function StatusBar() {
       )}
       {settings && (
         <div className="item clickable" title="Model and effort (Settings)" onClick={() => app.setOverlay("settings")}>
-          <Icon name="bulb" size={13} /> {settings.model.replace(/^claude-/, "")} · {settings.effort}
+          <Icon name="bulb" size={13} /> {PROVIDER_LABEL[settings.provider]} · {activeModel(settings).replace(/^claude-/, "") || "no model"} · {settings.effort}
         </div>
       )}
       <div className="item clickable" title="Toggle terminal (Ctrl+J)" onClick={() => app.setLayout({ terminalVisible: !app.layout.terminalVisible })}>
