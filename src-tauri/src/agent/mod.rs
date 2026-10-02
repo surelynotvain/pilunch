@@ -9,6 +9,7 @@ pub mod api;
 pub mod events;
 pub mod prompt;
 pub mod sse;
+pub mod toolbox;
 pub mod tools;
 
 #[cfg(test)]
@@ -51,6 +52,7 @@ pub enum Decision {
 struct Grants {
     edits: bool,
     commands: bool,
+    network: bool,
 }
 
 type ApprovalReply = oneshot::Sender<(Decision, Option<String>)>;
@@ -199,7 +201,14 @@ impl<'a, R: Runtime> Run<'a, R> {
                 return "cancelled".into();
             }
             let mode = self.state.settings.permission_mode();
-            let tools = if self.ws.is_some() { tools::definitions(mode, eager) } else { Vec::new() };
+            let web_search = self.settings.web_search && self.settings.is_default_endpoint() && api::ModelCaps::of(&self.settings.model).adaptive;
+            let tools = if self.ws.is_some() {
+                tools::definitions(&tools::ToolOptions { mode, eager, web_search })
+            } else if web_search {
+                vec![toolbox::web_search_def()]
+            } else {
+                Vec::new()
+            };
             let (body, betas) = api::build_request(RequestParts {
                 settings: &self.settings,
                 system: &system,
@@ -462,11 +471,40 @@ impl<'a, R: Runtime> Run<'a, R> {
 
     async fn run_tool(&mut self, id: &str, name: &str, input: &Value, sink: &mut Sink) -> tools::ToolResult {
         let summary = tools::describe(name, input);
+        let mode = self.state.settings.permission_mode();
+        let grants = self.state.agent.grants(&self.conv.meta.id);
+        // Tools that don't touch the workspace.
+        match tools::class_of(name) {
+            Some(tools::ToolClass::Meta) => {
+                return match toolbox::parse_todos(input) {
+                    Ok(todos) => toolbox::todo_result(&todos),
+                    Err(e) => tools::ToolResult::error(e, summary),
+                };
+            }
+            Some(tools::ToolClass::Network) => {
+                let (url, max) = match toolbox::parse_fetch(input) {
+                    Ok(v) => v,
+                    Err(e) => return tools::ToolResult::error(e, summary),
+                };
+                if mode != PermissionMode::Bypass && !grants.network {
+                    match self.ask(sink, id, "network", &summary, url.as_str()).await {
+                        None => return cancelled_result(summary),
+                        Some((Decision::Deny, feedback)) => return denied_result("request", summary, feedback, None),
+                        Some((Decision::AllowSession, _)) => self.grant(|g| g.network = true),
+                        Some((Decision::Allow, _)) => {}
+                    }
+                }
+                self.set_tool_ui(sink, id, ToolUi { status: ToolStatus::Running, summary: summary.clone(), detail: None, detail_kind: None, path: None });
+                return tokio::select! {
+                    r = toolbox::web_fetch(&self.state.http, url, max) => r,
+                    _ = self.cancel.cancelled() => cancelled_result(summary),
+                };
+            }
+            _ => {}
+        }
         let Some(ws) = self.ws.clone() else {
             return tools::ToolResult::error("No folder is open, so file and command tools are unavailable.", summary);
         };
-        let mode = self.state.settings.permission_mode();
-        let grants = self.state.agent.grants(&self.conv.meta.id);
         match tools::class_of(name) {
             None => tools::ToolResult::error(format!("Unknown tool: {name}"), summary),
             Some(tools::ToolClass::Read) => {
@@ -476,6 +514,7 @@ impl<'a, R: Runtime> Run<'a, R> {
                     .await
                     .unwrap_or_else(|e| tools::ToolResult::error(format!("Tool crashed: {e}"), summary))
             }
+            Some(tools::ToolClass::Meta | tools::ToolClass::Network) => unreachable!("handled above"),
             Some(_) if mode == PermissionMode::Plan => {
                 tools::ToolResult::error("Plan mode is on: file edits and commands are disabled. Present your plan instead.", summary)
             }

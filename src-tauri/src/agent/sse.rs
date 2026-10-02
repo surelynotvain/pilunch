@@ -161,6 +161,8 @@ pub enum BlockKind {
     Text,
     Thinking,
     ToolUse,
+    /// Server-side tool call (e.g. web_search): input streams like tool_use, but the API runs it.
+    ServerToolUse,
     Other,
 }
 
@@ -170,6 +172,7 @@ impl BlockKind {
             BlockKind::Text => "text",
             BlockKind::Thinking => "thinking",
             BlockKind::ToolUse => "tool_use",
+            BlockKind::ServerToolUse => "server_tool_use",
             BlockKind::Other => "other",
         }
     }
@@ -229,6 +232,7 @@ impl MessageBuilder {
             Some("text") => BlockKind::Text,
             Some("thinking") => BlockKind::Thinking,
             Some("tool_use") => BlockKind::ToolUse,
+            Some("server_tool_use") => BlockKind::ServerToolUse,
             _ => BlockKind::Other,
         };
         let text = match kind {
@@ -327,6 +331,11 @@ impl MessageBuilder {
                             }
                         };
                         m.insert("input".into(), input);
+                    }
+                    BlockKind::ServerToolUse => {
+                        if let Ok(v) = parse_tool_json(&b.json) {
+                            m.insert("input".into(), v);
+                        }
                     }
                     BlockKind::Other => {}
                 }
@@ -464,6 +473,18 @@ mod tests {
             ]
         );
         assert!(turn.invalid_inputs.is_empty());
+    }
+
+    #[test]
+    fn server_tool_use_input_is_accumulated() {
+        let mut b = MessageBuilder::default();
+        feed(&mut b, json!({"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srv_1","name":"web_search","input":{}}}));
+        feed(&mut b, json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\": \"tauri 2\"}"}}));
+        feed(&mut b, json!({"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srv_1","content":[{"type":"web_search_result","url":"https://v2.tauri.app","title":"Tauri"}]}}));
+        assert!(b.tool_input(0).is_none(), "server tools are not executed locally");
+        let turn = b.finish();
+        assert_eq!(turn.content[0]["input"], json!({"query":"tauri 2"}));
+        assert_eq!(turn.content[1]["content"][0]["url"], "https://v2.tauri.app");
     }
 
     #[test]

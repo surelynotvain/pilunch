@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { Icon, Logo } from "../Icon";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
+import { PlanPanel } from "./PlanPanel";
 import { useChat } from "../../store/chat";
 import { useApp } from "../../store/app";
 import { useEditor } from "../../store/editor";
@@ -171,6 +172,7 @@ export function ChatPanel({ docked }: { docked: boolean }) {
         </button>
       </div>
       {empty || !activeId ? <EmptyChat docked={docked} /> : <MessageList convId={activeId} />}
+      {activeId && <PlanPanel convId={activeId} />}
       <Composer convId={activeId} />
     </div>
   );

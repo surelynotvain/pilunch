@@ -43,7 +43,7 @@ fs.appendFileSync(path.join(ws, "README.md"), "\nUncommitted change.\n");
 
 fs.writeFileSync(
   path.join(configDir, "settings.json"),
-  JSON.stringify({ baseUrl: `http://127.0.0.1:${MOCK_PORT}`, permissionMode: "ask", recentWorkspaces: [ws], theme: "dark" }),
+  JSON.stringify({ baseUrl: `http://127.0.0.1:${MOCK_PORT}`, permissionMode: "ask", recentWorkspaces: [ws], theme: "dark", onboarded: false }),
 );
 fs.writeFileSync(path.join(configDir, "secrets.json"), JSON.stringify({ anthropicApiKey: "test-key" }), { mode: 0o600 });
 fs.rmSync(OUT, { recursive: true, force: true });
@@ -181,17 +181,28 @@ const idle = () => waitFor("agent to finish", async () => !(await find("[data-te
 
 // ---------------------------------------------------------------------------- scenario
 try {
-  await step("app starts on the welcome screen", async () => {
-    await waitEl("[data-testid=chat-panel]", 30000);
-    await waitEl("[data-testid=recent-workspace]");
-    const title = await textOf(".welcome h1");
-    assert(title.includes("PiLunch"), `welcome title: ${title}`);
-    await sleep(300);
-    await shot("welcome");
+  await step("first-run setup wizard", async () => {
+    await waitEl("[data-testid=onboarding]", 30000);
+    await sleep(700);
+    await shot("setup-welcome");
+    await click("[data-testid=onb-next]");
+    await waitFor("key detected", async () => (await textOf("[data-testid=onboarding]"))?.includes("already saved"));
+    await sleep(400);
+    await shot("setup-connect");
+    await click("[data-testid=onb-next]");
+    await sleep(400);
+    await shot("setup-model");
+    await click("[data-testid=onb-next]");
+    await sleep(400);
+    await shot("setup-permissions");
+    await click("[data-testid=onb-next]");
+    await click("[data-testid=onb-recent]");
+    await waitFor("wizard closed", async () => !(await find("[data-testid=onboarding]")));
+    const saved = JSON.parse(fs.readFileSync(path.join(configDir, "settings.json"), "utf8"));
+    assert(saved.onboarded === true, "onboarded persisted");
   });
 
-  await step("open the recent folder", async () => {
-    await click("[data-testid=recent-workspace]");
+  await step("folder is open with git status", async () => {
     await click("[data-testid=activity-explorer]");
     await waitEl('[data-path="src"]');
     await waitFor("git status in status bar", async () => (await textOf("[data-testid=statusbar]"))?.includes("main"));
@@ -212,7 +223,7 @@ try {
     const req = requests().at(-1);
     assert(req.body.model === "claude-opus-5-5", "default model");
     assert(req.body.stream === true && req.body.thinking?.type === "adaptive", "adaptive thinking + streaming");
-    assert(req.body.tools.map((t) => t.name).join(",") === "read_file,list_dir,glob,grep,edit_file,write_file,run_command", "tools sent");
+    assert(req.body.tools.length === 19 && req.body.tools.some((t) => t.name === "find_replace"), `tools sent: ${req.body.tools.length}`);
     assert(req.body.system[0].text.includes(ws), "system prompt has workspace root");
     await shot("chat-answer");
   });

@@ -44,6 +44,10 @@ pub struct Settings {
     /// Empty = $SHELL (Linux/macOS) or PowerShell (Windows)
     pub terminal_shell: String,
     pub recent_workspaces: Vec<String>,
+    /// Let Claude search the web (Anthropic server-side tool; billed per search).
+    pub web_search: bool,
+    /// The first-run setup has been completed.
+    pub onboarded: bool,
 }
 
 impl Default for Settings {
@@ -62,6 +66,8 @@ impl Default for Settings {
             editor_minimap: true,
             terminal_shell: String::new(),
             recent_workspaces: Vec::new(),
+            web_search: false,
+            onboarded: false,
         }
     }
 }

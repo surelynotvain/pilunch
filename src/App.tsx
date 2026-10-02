@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Icon, Logo } from "./components/Icon";
+import { Icon } from "./components/Icon";
 import { Splitter } from "./components/Splitter";
 import { Explorer } from "./components/sidebar/Explorer";
 import { SearchPanel } from "./components/sidebar/SearchPanel";
@@ -12,6 +12,8 @@ import { SettingsModal } from "./components/SettingsModal";
 import { StatusBar } from "./components/StatusBar";
 import { ContextMenuHost } from "./components/ContextMenu";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { TitleBar } from "./components/TitleBar";
+import { Onboarding } from "./components/Onboarding";
 import { commandForEvent } from "./commands";
 import { useApp, type SidebarView } from "./store/app";
 import { useChat } from "./store/chat";
@@ -32,14 +34,6 @@ function SidebarShell({ children }: { children: React.ReactNode }) {
   const running = useChat((s) => Object.values(s.runs).some((r) => r.running));
   return (
     <>
-      <div className="sb-brand">
-        <Logo size={20} />
-        <span className="sb-name">PiLunch</span>
-        <span className="spacer" />
-        <button className="icon-btn" title="Hide sidebar (Ctrl+B)" onClick={() => useApp.getState().setLayout({ sidebarVisible: false })}>
-          <Icon name="sidebar" size={16} />
-        </button>
-      </div>
       <div className="sb-new">
         <button className="new-chat-btn" onClick={() => useChat.getState().newChat()} data-testid="sidebar-new-chat">
           <Icon name="edit" size={15} />
@@ -108,6 +102,7 @@ export function App() {
   const [ready, setReady] = useState(false);
   const layout = useApp((s) => s.layout);
   const overlay = useApp((s) => s.overlay);
+  const needsSetup = useApp((s) => s.settings?.onboarded === false);
   const workspace = useApp((s) => s.workspace);
   const hasTabs = useEditor((s) => s.tabs.length > 0);
   const [terminalMounted, setTerminalMounted] = useState(layout.terminalVisible);
@@ -170,12 +165,8 @@ export function App() {
 
   return (
     <div className="app">
+      <TitleBar />
       <div className="main">
-        {!layout.sidebarVisible && (
-          <button className="sb-reveal icon-btn" title="Show sidebar (Ctrl+B)" onClick={() => useApp.getState().setLayout({ sidebarVisible: true })}>
-            <Icon name="sidebar" size={16} />
-          </button>
-        )}
         {layout.sidebarVisible && (
           <>
             <div className="sidebar" style={{ width: layout.sidebarWidth }}>
@@ -221,6 +212,7 @@ export function App() {
         )}
       </div>
       <StatusBar />
+      {needsSetup && <Onboarding />}
       {overlay === "settings" && <SettingsModal />}
       {(overlay === "quickOpen" || overlay === "commands") && <Palette key={overlay} mode={overlay} />}
       <ContextMenuHost />

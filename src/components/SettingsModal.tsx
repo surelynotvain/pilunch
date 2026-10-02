@@ -153,6 +153,13 @@ export function SettingsModal() {
               </select>
             </div>
             <div className="field">
+              <label>
+                Web search
+                <span className="help">Let Claude search the web for docs and answers (Anthropic bills per search).</span>
+              </label>
+              <Switch on={s.webSearch} onChange={(v) => update({ webSearch: v })} />
+            </div>
+            <div className="field">
               <label>Show thinking</label>
               <Switch on={s.showThinking} onChange={(v) => update({ showThinking: v })} />
             </div>

@@ -6,7 +6,7 @@ import { useEditor } from "./editor";
 
 export interface DraftBlock {
   index: number;
-  kind: "text" | "thinking" | "tool_use" | "other";
+  kind: "text" | "thinking" | "tool_use" | "server_tool_use" | "other";
   text: string;
   toolId?: string;
   toolName?: string;
@@ -18,7 +18,7 @@ export interface DraftBlock {
 export interface Approval {
   approvalId: string;
   toolId: string;
-  kind: "edit" | "command";
+  kind: "edit" | "command" | "network";
   title: string;
   detail: string;
 }

@@ -1,13 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#7c5cff"/>
-      <stop offset="1" stop-color="#ff7a59"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26262c"/>
+      <stop offset="1" stop-color="#0c0c0f"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.10"/>
+    </linearGradient>
+    <linearGradient id="cursor" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b8bff"/>
+      <stop offset="1" stop-color="#5b4cf0"/>
+    </linearGradient>
+    <linearGradient id="glyph" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d4d4dc"/>
     </linearGradient>
   </defs>
-  <rect x="48" y="48" width="928" height="928" rx="212" fill="url(#bg)"/>
-  <!-- geometric pi: bar + two legs -->
-  <path d="M232 332 H792" stroke="#fff" stroke-width="84" stroke-linecap="round" fill="none"/>
-  <path d="M376 340 C376 520 360 640 300 744" stroke="#fff" stroke-width="84" stroke-linecap="round" fill="none"/>
-  <path d="M648 340 V640 C648 700 676 744 744 744" stroke="#fff" stroke-width="84" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <rect x="64" y="64" width="896" height="896" rx="216" fill="url(#tile)"/>
+  <rect x="66" y="66" width="892" height="892" rx="214" fill="none" stroke="url(#rim)" stroke-width="4"/>
+  <!-- π: top bar, left leg with a slight flare, right leg ending in a cursor block -->
+  <rect x="226" y="300" width="572" height="84" rx="42" fill="url(#glyph)"/>
+  <path d="M372 384 h84 v220 c0 64 -16 112 -52 158 a42 42 0 0 1 -66 -52 c22 -28 34 -60 34 -106 z" fill="url(#glyph)"/>
+  <path d="M568 384 h84 v314 a42 42 0 0 1 -84 0 z" fill="url(#glyph)"/>
+  <rect x="694" y="676" width="104" height="64" rx="16" fill="url(#cursor)"/>
 </svg>

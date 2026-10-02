@@ -18,6 +18,8 @@ export interface Settings {
   editorMinimap: boolean;
   terminalShell: string;
   recentWorkspaces: string[];
+  webSearch: boolean;
+  onboarded: boolean;
 }
 
 export interface SettingsView extends Settings {
@@ -158,13 +160,13 @@ export type AgentEvent =
   | { type: "messageAppended"; message: StoredMessage }
   | { type: "title"; title: string }
   | { type: "requestStarted"; model: string }
-  | { type: "blockStart"; index: number; kind: "text" | "thinking" | "tool_use" | "other"; toolId: string | null; toolName: string | null }
+  | { type: "blockStart"; index: number; kind: "text" | "thinking" | "tool_use" | "server_tool_use" | "other"; toolId: string | null; toolName: string | null }
   | { type: "delta"; index: number; text: string }
   | { type: "toolInputProgress"; index: number; bytes: number }
   | { type: "toolInput"; index: number; toolId: string; name: string; input: Record<string, unknown>; summary: string }
   | { type: "toolStatus"; toolId: string; ui: ToolUi }
   | { type: "toolOutput"; toolId: string; text: string }
-  | { type: "approvalRequest"; approvalId: string; toolId: string; kind: "edit" | "command"; title: string; detail: string }
+  | { type: "approvalRequest"; approvalId: string; toolId: string; kind: "edit" | "command" | "network"; title: string; detail: string }
   | { type: "approvalResolved"; approvalId: string; toolId: string }
   | { type: "usage"; totals: UsageTotals; contextTokens: number }
   | { type: "retrying"; attempt: number; delayMs: number; message: string }

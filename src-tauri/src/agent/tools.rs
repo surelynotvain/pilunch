@@ -32,20 +32,35 @@ pub enum ToolClass {
     Read,
     Edit,
     Command,
+    /// Network access (web_fetch): asks in Ask / Auto-accept-edits modes.
+    Network,
+    /// Bookkeeping (todo_write): never asks, allowed in Plan mode.
+    Meta,
 }
 
 pub fn class_of(name: &str) -> Option<ToolClass> {
     match name {
-        "read_file" | "list_dir" | "glob" | "grep" => Some(ToolClass::Read),
-        "edit_file" | "write_file" => Some(ToolClass::Edit),
+        "read_file" | "list_dir" | "glob" | "grep" | "read_many_files" | "file_info" | "git_status" | "git_diff" | "git_log" => Some(ToolClass::Read),
+        "edit_file" | "write_file" | "multi_edit" | "find_replace" | "create_directory" | "move_path" | "delete_path" => Some(ToolClass::Edit),
         "run_command" => Some(ToolClass::Command),
+        "web_fetch" => Some(ToolClass::Network),
+        "todo_write" => Some(ToolClass::Meta),
         _ => None,
     }
 }
 
 /// Tool definitions, in a fixed order (prompt-cache friendly). Plan mode exposes only
 /// read-only tools. `eager` streams tool inputs as they are generated (Claude API only).
-pub fn definitions(mode: PermissionMode, eager: bool) -> Vec<Value> {
+pub struct ToolOptions {
+    pub mode: PermissionMode,
+    /// Stream tool inputs as generated (Claude API only).
+    pub eager: bool,
+    /// Add Anthropic's server-side web search tool.
+    pub web_search: bool,
+}
+
+pub fn definitions(opts: &ToolOptions) -> Vec<Value> {
+    let (mode, eager) = (opts.mode, opts.eager);
     let mut tools = vec![
         json!({
             "name": "read_file",
@@ -96,6 +111,9 @@ pub fn definitions(mode: PermissionMode, eager: bool) -> Vec<Value> {
             }
         }),
     ];
+    tools.extend(super::toolbox::read_defs());
+    tools.extend(super::toolbox::web_defs());
+    tools.push(super::toolbox::todo_def());
     if mode != PermissionMode::Plan {
         tools.push(json!({
             "name": "edit_file",
@@ -136,10 +154,17 @@ pub fn definitions(mode: PermissionMode, eager: bool) -> Vec<Value> {
             }
         }));
     }
+    if mode != PermissionMode::Plan {
+        tools.extend(super::toolbox::edit_defs());
+    }
     if eager {
         for t in &mut tools {
             t["eager_input_streaming"] = json!(true);
         }
+    }
+    if opts.web_search {
+        // Server tool: no eager_input_streaming field allowed.
+        tools.push(super::toolbox::web_search_def());
     }
     tools
 }
@@ -252,6 +277,18 @@ pub fn describe(name: &str, input: &Value) -> String {
         "edit_file" => format!("Edit {}", s("path")),
         "write_file" => format!("Write {}", s("path")),
         "run_command" => format!("Run {}", truncate_end(s("command").lines().next().unwrap_or(""), 120)),
+        "multi_edit" => format!("Edit {}", s("path")),
+        "find_replace" => format!("Replace {} → {}", s("pattern"), s("replacement")),
+        "create_directory" => format!("Create {}/", s("path")),
+        "move_path" => format!("Move {} → {}", s("from"), s("to")),
+        "delete_path" => format!("Delete {}", s("path")),
+        "read_many_files" => format!("Read {} files", input.get("paths").and_then(Value::as_array).map_or(0, Vec::len)),
+        "file_info" => format!("Inspect {}", s("path")),
+        "git_status" => "Git status".into(),
+        "git_diff" => "Git diff".into(),
+        "git_log" => "Git log".into(),
+        "web_fetch" => format!("Fetch {}", truncate_end(&s("url"), 100)),
+        "todo_write" => "Update plan".into(),
         other => other.to_string(),
     }
 }
@@ -266,6 +303,9 @@ pub fn run_read(name: &str, input: &Value, ws: &Workspace, index: &FileIndex) ->
         "list_dir" => list_dir(input, ws),
         "glob" => glob(input, ws, index),
         "grep" => grep(input, ws),
+        "read_many_files" => super::toolbox::read_many_files(input, ws),
+        "file_info" => super::toolbox::file_info(input, ws),
+        "git_status" | "git_diff" | "git_log" => super::toolbox::git_tool(name, input, ws),
         _ => Err(format!("Unknown tool {name}")),
     };
     res.unwrap_or_else(|e| ToolResult::error(e, describe(name, input)))
@@ -398,14 +438,37 @@ fn grep(input: &Value, ws: &Workspace) -> Result<ToolResult, String> {
 // File edits
 // ---------------------------------------------------------------------------------------
 
+/// One filesystem operation of a prepared change.
+pub enum ChangeOp {
+    Write { abs: PathBuf, rel: String, old: Option<String>, new: String },
+    Mkdir { abs: PathBuf, rel: String },
+    Move { from: PathBuf, to: PathBuf, rel_from: String, rel_to: String },
+    /// Moves to the system trash, so agent deletes are recoverable.
+    Delete { abs: PathBuf, rel: String },
+}
+
+/// A change computed up front (so it can be reviewed as a diff) and applied after approval.
 pub struct PreparedEdit {
-    pub abs: PathBuf,
-    pub rel: String,
-    /// Content before the change (None = new file).
-    pub old: Option<String>,
-    pub new: String,
+    pub ops: Vec<ChangeOp>,
     pub diff: String,
     pub summary: String,
+    /// Main path, for "open in editor".
+    pub path: Option<String>,
+}
+
+impl PreparedEdit {
+    fn single(abs: PathBuf, rel: String, old: Option<String>, new: String, verb: &str) -> Self {
+        let (diff, add, del) = diff_with_stats(&rel, old.as_deref(), &new);
+        let summary = if old.is_none() { format!("Create {rel} (+{add})") } else { format!("{verb} {rel} (+{add} −{del})") };
+        PreparedEdit { path: Some(rel.clone()), ops: vec![ChangeOp::Write { abs, rel, old, new }], diff, summary }
+    }
+}
+
+fn read_existing(abs: &std::path::Path, rel: &str) -> Result<String, String> {
+    if !abs.is_file() {
+        return Err(format!("{rel} does not exist. Use write_file to create a new file."));
+    }
+    std::fs::read_to_string(abs).map_err(|e| format!("Cannot read {rel}: {e}"))
 }
 
 pub fn prepare_edit(name: &str, input: &Value, ws: &Workspace) -> Result<PreparedEdit, String> {
@@ -414,13 +477,9 @@ pub fn prepare_edit(name: &str, input: &Value, ws: &Workspace) -> Result<Prepare
             let i: EditFileIn = parse(input)?;
             let abs = ws.resolve(&i.path).map_err(|e| e.to_string())?;
             let rel = ws.relative(&abs);
-            if !abs.is_file() {
-                return Err(format!("{rel} does not exist. Use write_file to create a new file."));
-            }
-            let old = std::fs::read_to_string(&abs).map_err(|e| format!("Cannot read {rel}: {e}"))?;
+            let old = read_existing(&abs, &rel)?;
             let new = apply_replacement(&old, &i.old_string, &i.new_string, i.replace_all).map_err(|e| format!("{e} (in {rel})"))?;
-            let (diff, add, del) = diff_with_stats(&rel, Some(&old), &new);
-            Ok(PreparedEdit { abs, summary: format!("Edit {rel} (+{add} −{del})"), rel, old: Some(old), new, diff })
+            Ok(PreparedEdit::single(abs, rel, Some(old), new, "Edit"))
         }
         "write_file" => {
             let i: WriteFileIn = parse(input)?;
@@ -430,35 +489,73 @@ pub fn prepare_edit(name: &str, input: &Value, ws: &Workspace) -> Result<Prepare
                 return Err(format!("{rel} is a directory"));
             }
             let old = if abs.exists() { Some(std::fs::read_to_string(&abs).map_err(|e| format!("Cannot read {rel}: {e}"))?) } else { None };
-            let (diff, add, del) = diff_with_stats(&rel, old.as_deref(), &i.content);
-            let summary = if old.is_some() { format!("Write {rel} (+{add} −{del})") } else { format!("Create {rel} (+{add})") };
-            Ok(PreparedEdit { abs, rel, old, new: i.content, diff, summary })
+            Ok(PreparedEdit::single(abs, rel, old, i.content, "Write"))
         }
+        "multi_edit" => crate::agent::toolbox::prepare_multi_edit(input, ws),
+        "find_replace" => crate::agent::toolbox::prepare_find_replace(input, ws),
+        "create_directory" | "move_path" | "delete_path" => crate::agent::toolbox::prepare_fs_op(name, input, ws),
         _ => Err(format!("{name} is not an edit tool")),
     }
 }
 
-/// Write a prepared edit, refusing if the file changed since the diff was computed.
+/// Apply a prepared change. Every precondition is re-checked first (files unchanged since
+/// the diff was shown, move targets free), so nothing is half-applied on a conflict.
 pub fn apply_edit(p: &PreparedEdit) -> ToolResult {
-    let current = std::fs::read_to_string(&p.abs).ok();
-    if current != p.old {
-        return ToolResult::error(
-            format!("{} changed on disk since this edit was prepared. Read it again and redo the edit.", p.rel),
-            p.summary.clone(),
-        );
+    for op in &p.ops {
+        let problem = match op {
+            ChangeOp::Write { abs, rel, old, .. } => (std::fs::read_to_string(abs).ok() != *old)
+                .then(|| format!("{rel} changed on disk since this edit was prepared. Read it again and redo the edit.")),
+            ChangeOp::Move { from, to, rel_from, rel_to } => {
+                if !from.exists() {
+                    Some(format!("{rel_from} no longer exists"))
+                } else if to.exists() {
+                    Some(format!("{rel_to} already exists"))
+                } else {
+                    None
+                }
+            }
+            ChangeOp::Delete { abs, rel } => (!abs.exists() && !abs.is_symlink()).then(|| format!("{rel} no longer exists")),
+            ChangeOp::Mkdir { .. } => None,
+        };
+        if let Some(msg) = problem {
+            return ToolResult::error(msg, p.summary.clone());
+        }
     }
-    if let Err(e) = atomic_write(&p.abs, p.new.as_bytes()) {
-        return ToolResult::error(format!("Failed to write {}: {e}", p.rel), p.summary.clone());
+    let mut done = Vec::new();
+    for op in &p.ops {
+        let res = match op {
+            ChangeOp::Write { abs, rel, new, old } => atomic_write(abs, new.as_bytes())
+                .map(|_| format!("{} {rel} ({} lines)", if old.is_some() { "Updated" } else { "Created" }, new.lines().count()))
+                .map_err(|e| format!("Failed to write {rel}: {e}")),
+            ChangeOp::Mkdir { abs, rel } => std::fs::create_dir_all(abs).map(|_| format!("Created folder {rel}")).map_err(|e| format!("Failed to create {rel}: {e}")),
+            ChangeOp::Move { from, to, rel_from, rel_to } => {
+                if let Some(parent) = to.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::rename(from, to).map(|_| format!("Moved {rel_from} → {rel_to}")).map_err(|e| format!("Failed to move {rel_from}: {e}"))
+            }
+            ChangeOp::Delete { abs, rel } => trash::delete(abs).map(|_| format!("Moved {rel} to the trash")).map_err(|e| format!("Failed to delete {rel}: {e}")),
+        };
+        match res {
+            Ok(m) => done.push(m),
+            Err(e) => {
+                let msg = if done.is_empty() { e } else { format!("{e}. Already applied: {}", done.join("; ")) };
+                return ToolResult::error(msg, p.summary.clone());
+            }
+        }
     }
-    let verb = if p.old.is_some() { "Updated" } else { "Created" };
-    let lines = p.new.lines().count();
-    let summary = p.summary.replacen("Edit ", "Edited ", 1).replacen("Write ", "Wrote ", 1).replacen("Create ", "Created ", 1);
-    ToolResult::ok(
-        format!("{verb} {} ({lines} lines).", p.rel),
-        summary,
-        Some((p.diff.clone(), "diff")),
-        Some(p.rel.clone()),
-    )
+    let summary = past_tense(&p.summary);
+    let detail = if p.diff.trim().is_empty() { None } else { Some((p.diff.clone(), "diff")) };
+    ToolResult::ok(format!("{}.", done.join("\n")), summary, detail, p.path.clone())
+}
+
+fn past_tense(s: &str) -> String {
+    for (a, b) in [("Edit ", "Edited "), ("Write ", "Wrote "), ("Create ", "Created "), ("Move ", "Moved "), ("Delete ", "Deleted "), ("Replace ", "Replaced ")] {
+        if let Some(rest) = s.strip_prefix(a) {
+            return format!("{b}{rest}");
+        }
+    }
+    s.to_string()
 }
 
 pub fn apply_replacement(content: &str, old: &str, new: &str, replace_all: bool) -> Result<String, String> {
@@ -700,11 +797,19 @@ mod tests {
     #[test]
     fn definitions_respect_mode_and_eager() {
         let names = |t: Vec<Value>| t.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(names(definitions(PermissionMode::Plan, false)), ["read_file", "list_dir", "glob", "grep"]);
-        let all = definitions(PermissionMode::Ask, true);
-        assert_eq!(names(all.clone()).len(), 7);
+        let opts = |mode, eager, web_search| ToolOptions { mode, eager, web_search };
+        let plan = names(definitions(&opts(PermissionMode::Plan, false, false)));
+        assert!(plan.contains(&"git_diff".to_string()) && plan.contains(&"todo_write".to_string()));
+        assert!(!plan.iter().any(|n| class_of(n).is_some_and(|c| matches!(c, ToolClass::Edit | ToolClass::Command))));
+        let all = definitions(&opts(PermissionMode::Ask, true, false));
+        assert_eq!(all.len(), 19); // + web_search when enabled = 20
+        assert!(names(all.clone()).iter().all(|n| class_of(n).is_some()), "every tool has a class");
         assert!(all.iter().all(|t| t["eager_input_streaming"] == true));
-        assert!(definitions(PermissionMode::Ask, false).iter().all(|t| t.get("eager_input_streaming").is_none()));
+        assert!(definitions(&opts(PermissionMode::Ask, false, false)).iter().all(|t| t.get("eager_input_streaming").is_none()));
+        let ws = definitions(&opts(PermissionMode::Ask, true, true));
+        let last = ws.last().unwrap();
+        assert_eq!(last["type"], "web_search_20260209");
+        assert!(last.get("eager_input_streaming").is_none());
     }
 
     #[test]
@@ -764,7 +869,7 @@ mod tests {
         assert!(apply_edit(&p2).is_error);
         // new file
         let p3 = prepare_edit("write_file", &json!({"path":"docs/new.md","content":"# New\n"}), &w).unwrap();
-        assert!(p3.old.is_none());
+        assert!(p3.summary.starts_with("Create docs/new.md"));
         assert!(p3.diff.starts_with("--- /dev/null"));
         assert!(!apply_edit(&p3).is_error);
         assert_eq!(std::fs::read_to_string(d.path().join("docs/new.md")).unwrap(), "# New\n");

@@ -297,7 +297,8 @@ fn bypass_mode_runs_commands_and_plan_mode_hides_write_tools() {
     run_message(&h, "plan something", |_| panic!("no approvals in plan mode"));
     let reqs = recorded.lock().unwrap().clone();
     let names: Vec<_> = reqs[2].body["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
-    assert_eq!(names, ["read_file", "list_dir", "glob", "grep"]);
+    assert!(names.contains(&"read_file".to_string()) && names.contains(&"git_diff".to_string()));
+    assert!(!names.iter().any(|n| ["edit_file", "write_file", "run_command", "delete_path", "find_replace"].contains(&n.as_str())));
     assert!(reqs[2].body["system"][0]["text"].as_str().unwrap().contains("# Plan mode"));
     // second user message follows the previous assistant answer
     let msgs = reqs[2].body["messages"].as_array().unwrap();

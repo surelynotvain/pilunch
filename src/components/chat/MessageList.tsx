@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon, Logo } from "../Icon";
 import { Markdown } from "./Markdown";
-import { ToolCard } from "./ToolCard";
+import { ToolCard, WebSearchRow } from "./ToolCard";
 import { useChat, type DraftBlock, type LiveRun } from "../../store/chat";
 import { useApp } from "../../store/app";
 import { useEditor } from "../../store/editor";
@@ -79,6 +79,11 @@ const AssistantBlocks = memo(function AssistantBlocks({ convId, msg, toolUi }: {
             return <Thinking key={i} text={b.thinking ?? ""} />;
           case "tool_use":
             return <ToolCard key={b.id} convId={convId} toolId={b.id!} name={b.name!} input={b.input} ui={toolUi[b.id!]} />;
+          case "server_tool_use": {
+            const result = msg.content.find((r) => r.type === "web_search_tool_result" && r.tool_use_id === b.id);
+            const items = Array.isArray(result?.content) ? (result!.content as { url: string; title?: string }[]) : result ? [] : undefined;
+            return <WebSearchRow key={b.id ?? i} query={String((b.input as { query?: string } | undefined)?.query ?? "")} results={items} />;
+          }
           default:
             return null;
         }
@@ -90,9 +95,16 @@ const AssistantBlocks = memo(function AssistantBlocks({ convId, msg, toolUi }: {
 function DraftBlocks({ convId, draft, toolUi }: { convId: string; draft: DraftBlock[]; toolUi: Record<string, ToolUi> }) {
   return (
     <>
-      {draft.map((b) => {
-        if (b.kind === "text") return b.text ? <Markdown key={b.index} text={b.text} /> : null;
+      {draft.map((b, i) => {
+        if (b.kind === "text")
+          return b.text ? (
+            <div key={b.index}>
+              <Markdown text={b.text} />
+              {i === draft.length - 1 && <span className="streaming-caret" />}
+            </div>
+          ) : null;
         if (b.kind === "thinking") return <Thinking key={b.index} text={b.text} live />;
+        if (b.kind === "server_tool_use") return <WebSearchRow key={b.index} query="…" />;
         if (b.kind === "tool_use" && b.toolId)
           return (
             <ToolCard

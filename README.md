@@ -4,17 +4,26 @@
 
 The core is written in **Rust** (Tauri 2) and the UI in **TypeScript** (React + Monaco + xterm.js).
 
-![Chat](docs/screenshots/chat.png)
+![Setup](docs/screenshots/setup.png)
 
-| Reviewing an edit before it's applied | Commands, results and the editor side by side |
+| Chat | Reviewing an edit before it's applied |
 |---|---|
-| ![Approval](docs/screenshots/approval.png) | ![Command](docs/screenshots/command.png) |
+| ![Chat](docs/screenshots/chat.png) | ![Approval](docs/screenshots/approval.png) |
+| **Commands, results and the editor side by side** | **Light theme** |
+| ![Command](docs/screenshots/command.png) | ![Light](docs/screenshots/light.png) |
 
 <sub>Screenshots come from the automated end-to-end test, which drives the real app with scripted model responses.</sub>
 
 ## Features
 
-- **A coding agent in a chat window.** Ask in plain language. Claude explores the project (`list_dir`, `glob`, `grep`, `read_file`), makes focused edits (`edit_file`, `write_file`) and runs builds and tests (`run_command`), streaming as it works.
+- **A coding agent in a chat window, with 20 tools.** Ask in plain language and Claude works through the project, streaming as it goes:
+  - **Explore:** `read_file`, `read_many_files`, `list_dir`, `glob`, `grep`, `file_info`
+  - **Git:** `git_status`, `git_diff`, `git_log`
+  - **Change:** `edit_file`, `multi_edit`, `write_file`, `find_replace` (project-wide), `create_directory`, `move_path`, `delete_path` (to the trash)
+  - **Run:** `run_command`
+  - **Web:** `web_fetch`, plus Anthropic's built-in `web_search` (optional)
+  - **Plan:** `todo_write`, shown as a live checklist above the composer
+- **Guided setup.** A first-run wizard connects your API key, then picks the model, effort, theme and permission mode, and opens a project.
 - **You stay in control.** Every edit is shown as a diff and every command as text before it runs. You can **Apply**, **Allow for this chat**, or **Deny** with feedback ("use a markdown file instead"), and Claude adjusts. There are four permission modes: *Ask*, *Auto-accept edits*, *Plan* (read-only) and *Bypass*.
 - **A real editor.** Monaco (the editor inside VS Code) with tabs, syntax highlighting for 80+ languages, minimap and sticky scroll. Files the agent changes reload live, and unsaved work is never overwritten.
 - **Project tools.** A gitignore-aware explorer with git status colors, ripgrep-powered search, fuzzy quick-open (`Ctrl+P`), a command palette (`Ctrl+Shift+P`) and an integrated terminal with real PTYs.
@@ -34,7 +43,18 @@ The core is written in **Rust** (Tauri 2) and the UI in **TypeScript** (React + 
 
 ## Install
 
-### Linux
+Download the latest installers from the [**Releases page**](https://github.com/surelynotvain/pilunch/releases/latest):
+
+| Platform | File | Install |
+|---|---|---|
+| Debian / Ubuntu | `PiLunch_x.y.z_amd64.deb` | `sudo apt install ./PiLunch_*_amd64.deb` |
+| Fedora / RHEL / openSUSE | `PiLunch-x.y.z-1.x86_64.rpm` | `sudo dnf install ./PiLunch-*.rpm` |
+| Any Linux | `PiLunch_x.y.z_amd64.AppImage` | `chmod +x PiLunch_*.AppImage && ./PiLunch_*.AppImage` |
+| Windows 10/11 | `PiLunch_x.y.z_x64-setup.exe` / `.msi` | run the installer |
+
+Releases are built by GitHub Actions (`.github/workflows/release.yml`) whenever a `v*` tag is pushed.
+
+### Linux (from source)
 
 Build the packages (see below), then install the one for your distribution:
 
@@ -45,7 +65,7 @@ sudo dnf install ./src-tauri/target/release/bundle/rpm/PiLunch-0.1.0-1.x86_64.rp
 
 The build can also produce an AppImage: `npm run tauri build -- --bundles appimage`.
 
-### Windows
+### Windows (from source)
 
 Run `npm run app:build` on Windows. It produces an `.msi` and an NSIS `.exe` installer in `src-tauri/target/release/bundle/`. WebView2 is preinstalled on Windows 10/11.
 

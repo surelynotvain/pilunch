@@ -164,22 +164,28 @@ export function Icon({ name, size = 16, className, style, title }: { name: IconN
   );
 }
 
-/** The PiLunch mark (gradient tile with π). */
+/** The PiLunch mark: graphite tile, geometric π and a terminal-cursor underscore. */
 export function Logo({ size = 28 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 1024 1024" aria-hidden>
+    <svg width={size} height={size} viewBox="64 64 896 896" aria-hidden className="logo-mark">
       <defs>
-        <linearGradient id="pl-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#7c5cff" />
-          <stop offset="1" stopColor="#ff7a59" />
+        <linearGradient id="pl-tile" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#2a2a31" />
+          <stop offset="1" stopColor="#0e0e11" />
+        </linearGradient>
+        <linearGradient id="pl-cursor" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#8b8bff" />
+          <stop offset="1" stopColor="#5b4cf0" />
         </linearGradient>
       </defs>
-      <rect x="48" y="48" width="928" height="928" rx="212" fill="url(#pl-bg)" />
-      <g stroke="#fff" strokeWidth="84" strokeLinecap="round" strokeLinejoin="round" fill="none">
-        <path d="M232 332 H792" />
-        <path d="M376 340 C376 520 360 640 300 744" />
-        <path d="M648 340 V640 C648 700 676 744 744 744" />
+      <rect x="64" y="64" width="896" height="896" rx="216" fill="url(#pl-tile)" />
+      <rect x="68" y="68" width="888" height="888" rx="212" fill="none" stroke="#fff" strokeOpacity="0.12" strokeWidth="8" />
+      <g fill="#f4f4f6">
+        <rect x="226" y="300" width="572" height="84" rx="42" />
+        <path d="M372 384 h84 v220 c0 64 -16 112 -52 158 a42 42 0 0 1 -66 -52 c22 -28 34 -60 34 -106 z" />
+        <path d="M568 384 h84 v314 a42 42 0 0 1 -84 0 z" />
       </g>
+      <rect className="logo-cursor" x="694" y="676" width="104" height="64" rx="16" fill="url(#pl-cursor)" />
     </svg>
   );
 }

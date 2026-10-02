@@ -13,6 +13,18 @@ const TOOL_ICON: Record<string, IconName> = {
   edit_file: "edit",
   write_file: "file",
   run_command: "terminal",
+  multi_edit: "edit",
+  find_replace: "refresh",
+  create_directory: "folder",
+  move_path: "chevronRight",
+  delete_path: "trash",
+  read_many_files: "files",
+  file_info: "file",
+  git_status: "branch",
+  git_diff: "branch",
+  git_log: "branch",
+  web_fetch: "globe",
+  todo_write: "list",
 };
 
 export function DiffView({ diff }: { diff: string }) {
@@ -52,13 +64,14 @@ function ApprovalBox({ convId, toolId }: { convId: string; toolId: string }) {
   const [showFeedback, setShowFeedback] = useState(false);
   if (!approval) return null;
   const isEdit = approval.kind === "edit";
+  const isNet = approval.kind === "network";
   return (
     <>
-      <div className="tool-body">{isEdit ? <DiffView diff={approval.detail} /> : <pre>$ {approval.detail}</pre>}</div>
+      <div className="tool-body">{isEdit ? <DiffView diff={approval.detail} /> : <pre>{isNet ? "GET " : "$ "}{approval.detail}</pre>}</div>
       <div className="approval">
         <div className="question">
           <Icon name="shield" size={15} />
-          {isEdit ? "Apply this change?" : "Run this command?"}
+          {isEdit ? "Apply this change?" : isNet ? "Fetch this URL?" : "Run this command?"}
         </div>
         {showFeedback && (
           <input
@@ -74,10 +87,10 @@ function ApprovalBox({ convId, toolId }: { convId: string; toolId: string }) {
         )}
         <div className="row">
           <button className="btn primary sm" onClick={() => void respond(approval.approvalId, "allow")}>
-            <Icon name="check" size={14} /> {isEdit ? "Apply" : "Run"}
+            <Icon name="check" size={14} /> {isEdit ? "Apply" : isNet ? "Fetch" : "Run"}
           </button>
           <button className="btn sm" onClick={() => void respond(approval.approvalId, "allowSession")}>
-            {isEdit ? "Apply all edits in this chat" : "Allow all commands in this chat"}
+            {isEdit ? "Apply all edits in this chat" : isNet ? "Allow all requests in this chat" : "Allow all commands in this chat"}
           </button>
           <span style={{ flex: 1 }} />
           {showFeedback ? (
@@ -164,3 +177,30 @@ export const ToolCard = memo(function ToolCard({ convId, toolId, name, input, ui
     </div>
   );
 });
+
+/** Anthropic server-side web search, rendered from the server_tool_use + result blocks. */
+export function WebSearchRow({ query, results }: { query: string; results?: { url: string; title?: string }[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="tool" data-tool="web_search">
+      <div className="tool-head" onClick={() => results?.length && setOpen(!open)}>
+        {results ? <Icon name="check" size={14} className="status-ok" /> : <div className="spinner" />}
+        <Icon name="globe" size={14} />
+        <span className="summary ellipsis">
+          Searched the web for “{query}”{results ? ` — ${results.length} results` : "…"}
+        </span>
+        {!!results?.length && <Icon name={open ? "chevronDown" : "chevronRight"} size={14} />}
+      </div>
+      {open && results && (
+        <div className="sources">
+          {results.map((r) => (
+            <a key={r.url} className="source" href={r.url} title={r.url} onClick={(e) => { e.preventDefault(); void import("@tauri-apps/plugin-opener").then((m) => m.openUrl(r.url)); }}>
+              <span className="ellipsis">{r.title || r.url}</span>
+              <span className="host">{(() => { try { return new URL(r.url).hostname; } catch { return ""; } })()}</span>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
