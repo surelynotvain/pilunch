@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::util::{atomic_write, now_ms};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -109,6 +109,8 @@ impl Conversation {
 pub struct ConversationStore {
     dir: PathBuf,
     index: Mutex<Vec<ConversationMeta>>,
+    /// Deleted while an agent run may still hold a copy; later saves are ignored.
+    deleted: Mutex<HashSet<String>>,
 }
 
 impl ConversationStore {
@@ -118,7 +120,7 @@ impl ConversationStore {
             .ok()
             .and_then(|b| serde_json::from_slice::<Vec<ConversationMeta>>(&b).ok())
             .unwrap_or_else(|| Self::rebuild_index(&dir));
-        Self { dir, index: Mutex::new(index) }
+        Self { dir, index: Mutex::new(index), deleted: Mutex::new(HashSet::new()) }
     }
 
     fn rebuild_index(dir: &PathBuf) -> Vec<ConversationMeta> {
@@ -173,6 +175,9 @@ impl ConversationStore {
     }
 
     pub fn save(&self, conv: &Conversation) -> Result<()> {
+        if self.deleted.lock().unwrap().contains(&conv.meta.id) {
+            return Ok(());
+        }
         let mut meta = conv.meta.clone();
         meta.message_count = conv.messages.len();
         let mut full = conv.clone();
@@ -198,6 +203,7 @@ impl ConversationStore {
 
     pub fn delete(&self, id: &str) -> Result<()> {
         let path = self.path_for(id)?;
+        self.deleted.lock().unwrap().insert(id.to_string());
         let _ = std::fs::remove_file(path);
         let mut idx = self.index.lock().unwrap();
         idx.retain(|m| m.id != id);
@@ -248,6 +254,10 @@ mod tests {
         assert_eq!(store2.list().len(), 1);
         store2.delete(&c.meta.id).unwrap();
         assert!(store2.list().is_empty());
+        // a late save from a still-running agent must not resurrect it
+        store2.save(&c).unwrap();
+        assert!(store2.list().is_empty());
+        assert!(store2.get(&c.meta.id).is_err());
         assert!(store2.get("../../etc/passwd").is_err());
     }
 

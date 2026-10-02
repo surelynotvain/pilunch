@@ -70,6 +70,7 @@ start("tauri-driver", ["--port", "4444"], {
   // Isolate WebKit's own storage (localStorage holds the layout) from previous runs.
   XDG_DATA_HOME: path.join(tmp, "xdg-data"),
   XDG_CACHE_HOME: path.join(tmp, "xdg-cache"),
+  XDG_CONFIG_HOME: path.join(tmp, "xdg-config"),
   WEBKIT_DISABLE_COMPOSITING_MODE: "1",
 });
 
@@ -111,10 +112,7 @@ async function waitFor(desc, fn, timeout = 15000) {
   for (;;) {
     const v = await fn().catch(() => null);
     if (v) return v;
-    if (Date.now() - t0 > timeout) {
-      await shot("FAILED");
-      throw new Error(`Timed out waiting for: ${desc}`);
-    }
+    if (Date.now() - t0 > timeout) throw new Error(`Timed out waiting for: ${desc}`);
     await sleep(150);
   }
 }
@@ -141,8 +139,8 @@ async function shot(name) {
   fs.writeFileSync(file, Buffer.from(png, "base64"));
   console.log(`  📸 ${path.relative(ROOT, file)}`);
 }
-const ENTER = "";
-const CTRL = "";
+const ENTER = "\uE007"; // WebDriver key codes
+const CTRL = "\uE009";
 /** Type with W3C key actions (plain key events, no caret games on the focused element). */
 async function keys(text, modifier) {
   const actions = [];

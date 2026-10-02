@@ -9,7 +9,13 @@ import type { ConversationMeta } from "../../lib/types";
 export function ChatList() {
   const list = useChat((s) => s.list);
   const activeId = useChat((s) => s.activeId);
-  const runs = useChat((s) => s.runs);
+  // A primitive: subscribing to `runs` itself would re-render on every streamed token.
+  const runningIds = useChat((s) =>
+    Object.keys(s.runs)
+      .filter((id) => s.runs[id]!.running)
+      .join(","),
+  );
+  const running = useMemo(() => new Set(runningIds.split(",").filter(Boolean)), [runningIds]);
   const workspace = useApp((s) => s.workspace);
   const [all, setAll] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -22,14 +28,14 @@ export function ChatList() {
     const filtered = all || !workspace ? list : list.filter((c) => c.workspace === workspace.root);
     const out: [string, ConversationMeta[]][] = [];
     for (const c of filtered) {
-      if (c.messageCount === 0 && !runs[c.id]?.running) continue;
+      if (c.messageCount === 0 && !running.has(c.id)) continue;
       const g = dayGroup(c.updatedAt);
       const last = out[out.length - 1];
       if (last && last[0] === g) last[1].push(c);
       else out.push([g, [c]]);
     }
     return out;
-  }, [list, all, workspace, runs]);
+  }, [list, all, workspace, running]);
 
   return (
     <>
@@ -57,7 +63,7 @@ export function ChatList() {
                 onDoubleClick={() => setRenaming(c.id)}
                 title={c.workspace ?? "No folder"}
               >
-                {runs[c.id]?.running ? <span className="live-dot" /> : <Icon name="chat" size={14} />}
+                {running.has(c.id) ? <span className="live-dot" /> : <Icon name="chat" size={14} />}
                 {renaming === c.id ? (
                   <input
                     autoFocus

@@ -26,6 +26,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Reopen the window at its last size and position.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(state::AppState::new(config_dir, data_dir))
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
