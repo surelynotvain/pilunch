@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
-import { MODELS } from "./chat/ChatPanel";
+import { MODELS } from "../lib/models";
 import { useApp } from "../store/app";
 import { api, errorText } from "../lib/ipc";
 import type { Effort, ModelInfo, PermissionMode, Settings, Theme } from "../lib/types";

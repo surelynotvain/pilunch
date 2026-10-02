@@ -4,7 +4,8 @@ import { useChat } from "../../store/chat";
 import { useApp } from "../../store/app";
 import { api } from "../../lib/ipc";
 import { basename, dirname } from "../../lib/util";
-import type { FileMatch, PermissionMode } from "../../lib/types";
+import type { Effort, FileMatch, PermissionMode } from "../../lib/types";
+import { EFFORTS, MODELS } from "../../lib/models";
 
 const MODES: { id: PermissionMode; label: string; title: string }[] = [
   { id: "ask", label: "Ask before edits", title: "Claude asks before every file edit and command" },
@@ -29,6 +30,8 @@ export function Composer({ convId }: { convId: string | null }) {
   const workspace = useApp((s) => s.workspace);
   const mode = useApp((s) => s.settings?.permissionMode ?? "ask");
   const hasKey = useApp((s) => s.settings?.hasApiKey ?? false);
+  const model = useApp((s) => s.settings?.model ?? "");
+  const effort = useApp((s) => s.settings?.effort ?? "high");
   const ta = useRef<HTMLTextAreaElement>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const [matches, setMatches] = useState<FileMatch[]>([]);
@@ -215,6 +218,31 @@ export function Composer({ convId }: { convId: string | null }) {
             </select>
           )}
           <span className="spacer" />
+          <select
+            className="pill-select"
+            value={model}
+            title="Model"
+            onChange={(e) => void useApp.getState().updateSettings({ model: e.target.value })}
+            data-testid="model-select"
+          >
+            {(MODELS.some((m) => m.id === model) ? MODELS : [...MODELS, { id: model, label: model }]).map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className="pill-select"
+            value={effort}
+            title="Thinking effort"
+            onChange={(e) => void useApp.getState().updateSettings({ effort: e.target.value as Effort })}
+          >
+            {EFFORTS.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.label}
+              </option>
+            ))}
+          </select>
           {running ? (
             <button className="send-btn stop" title="Stop (Esc)" onClick={() => cancel(convId ?? undefined)} data-testid="stop-button">
               <Icon name="stop" size={14} />

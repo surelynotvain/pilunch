@@ -9,12 +9,7 @@ import { useEditor } from "../../store/editor";
 import { api, errorText } from "../../lib/ipc";
 import { basename, formatTokens } from "../../lib/util";
 
-export const MODELS = [
-  { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
-  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
-  { id: "claude-fable-5-1", label: "Claude Fable 5.1" },
-  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
-];
+export { MODELS } from "../../lib/models";
 
 export async function pickFolder() {
   const dir = await open({ directory: true, multiple: false, title: "Open folder" });
@@ -149,11 +144,9 @@ export function ChatPanel({ docked }: { docked: boolean }) {
   const conv = useChat((s) => (s.activeId ? s.convs[s.activeId] : undefined));
   const contextTokens = useChat((s) => (s.activeId ? s.runs[s.activeId]?.contextTokens : undefined));
   const running = useChat((s) => (s.activeId ? !!s.runs[s.activeId]?.running : false));
-  const model = useApp((s) => s.settings?.model ?? "");
   const chatFocus = useApp((s) => s.layout.chatFocus);
   const hasTabs = useEditor((s) => s.tabs.length > 0);
   const empty = (!conv || conv.messages.length === 0) && !running;
-  const models = MODELS.some((m) => m.id === model) ? MODELS : [...MODELS, { id: model, label: model }];
 
   return (
     <div className={`chat${docked ? " docked" : ""}`} data-testid="chat-panel">
@@ -164,19 +157,6 @@ export function ChatPanel({ docked }: { docked: boolean }) {
             {formatTokens(contextTokens)} ctx
           </span>
         )}
-        <select
-          className="model-pill"
-          value={model}
-          onChange={(e) => void useApp.getState().updateSettings({ model: e.target.value })}
-          title="Model"
-          data-testid="model-select"
-        >
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
         {hasTabs && (
           <button
             className="icon-btn"

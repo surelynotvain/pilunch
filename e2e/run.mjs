@@ -192,6 +192,7 @@ try {
 
   await step("open the recent folder", async () => {
     await click("[data-testid=recent-workspace]");
+    await click("[data-testid=activity-explorer]");
     await waitEl('[data-path="src"]');
     await waitFor("git status in status bar", async () => (await textOf("[data-testid=statusbar]"))?.includes("main"));
     const readmeClass = await exec(`return document.querySelector('[data-path="README.md"] .name').className`);

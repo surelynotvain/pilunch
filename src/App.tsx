@@ -19,41 +19,66 @@ import { useEditor } from "./store/editor";
 import { api } from "./lib/ipc";
 import type { FsChanged } from "./lib/types";
 
-function ActivityBar() {
+const VIEWS: { id: SidebarView; label: string }[] = [
+  { id: "chats", label: "Chats" },
+  { id: "explorer", label: "Files" },
+  { id: "search", label: "Search" },
+];
+
+/** Unified sidebar chrome: brand, new chat, view switcher, footer actions. */
+function SidebarShell({ children }: { children: React.ReactNode }) {
   const layout = useApp((s) => s.layout);
+  const workspace = useApp((s) => s.workspace);
   const running = useChat((s) => Object.values(s.runs).some((r) => r.running));
-  const item = (view: SidebarView, icon: "files" | "search" | "chat", title: string) => (
-    <button
-      className={`icon-btn${layout.sidebarVisible && layout.sidebarView === view ? " active" : ""}`}
-      title={title}
-      onClick={() => useApp.getState().showSidebar(view)}
-      data-testid={`activity-${view}`}
-    >
-      <Icon name={icon} size={20} />
-      {view === "chats" && running && <span className="badge-dot" />}
-    </button>
-  );
   return (
-    <div className="activity">
-      <div className="logo" title="PiLunch">
-        <Logo size={26} />
+    <>
+      <div className="sb-brand">
+        <Logo size={20} />
+        <span className="sb-name">PiLunch</span>
+        <span className="spacer" />
+        <button className="icon-btn" title="Hide sidebar (Ctrl+B)" onClick={() => useApp.getState().setLayout({ sidebarVisible: false })}>
+          <Icon name="sidebar" size={16} />
+        </button>
       </div>
-      {item("explorer", "files", "Explorer (Ctrl+Shift+E)")}
-      {item("search", "search", "Search (Ctrl+Shift+F)")}
-      {item("chats", "chat", "Chats (Ctrl+Shift+H)")}
-      <span className="spacer" />
-      <button
-        className={`icon-btn${layout.terminalVisible ? " active" : ""}`}
-        title="Terminal (Ctrl+J)"
-        onClick={() => useApp.getState().setLayout({ terminalVisible: !layout.terminalVisible })}
-        data-testid="activity-terminal"
-      >
-        <Icon name="terminal" size={20} />
-      </button>
-      <button className="icon-btn" title="Settings (Ctrl+,)" onClick={() => useApp.getState().setOverlay("settings")} data-testid="activity-settings">
-        <Icon name="settings" size={20} />
-      </button>
-    </div>
+      <div className="sb-new">
+        <button className="new-chat-btn" onClick={() => useChat.getState().newChat()} data-testid="sidebar-new-chat">
+          <Icon name="edit" size={15} />
+          <span>New chat</span>
+          <span className="kbd">Ctrl N</span>
+        </button>
+      </div>
+      <div className="segmented">
+        {VIEWS.map((v) => (
+          <button
+            key={v.id}
+            className={layout.sidebarView === v.id ? "on" : ""}
+            onClick={() => useApp.getState().setLayout({ sidebarView: v.id })}
+            data-testid={`activity-${v.id}`}
+          >
+            {v.label}
+            {v.id === "chats" && running && <span className="live-dot sm" />}
+          </button>
+        ))}
+      </div>
+      <div className="sb-body">{children}</div>
+      <div className="sb-footer">
+        <button className="sb-ws" title={workspace?.root ?? "Open a folder"} onClick={() => useApp.getState().setOverlay("commands")}>
+          <Icon name="folder" size={14} />
+          <span className="ellipsis">{workspace?.name ?? "No folder"}</span>
+        </button>
+        <button
+          className={`icon-btn${layout.terminalVisible ? " active" : ""}`}
+          title="Terminal (Ctrl+J)"
+          onClick={() => useApp.getState().setLayout({ terminalVisible: !layout.terminalVisible })}
+          data-testid="activity-terminal"
+        >
+          <Icon name="terminal" size={16} />
+        </button>
+        <button className="icon-btn" title="Settings (Ctrl+,)" onClick={() => useApp.getState().setOverlay("settings")} data-testid="activity-settings">
+          <Icon name="settings" size={16} />
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -146,15 +171,21 @@ export function App() {
   return (
     <div className="app">
       <div className="main">
-        <ActivityBar />
+        {!layout.sidebarVisible && (
+          <button className="sb-reveal icon-btn" title="Show sidebar (Ctrl+B)" onClick={() => useApp.getState().setLayout({ sidebarVisible: true })}>
+            <Icon name="sidebar" size={16} />
+          </button>
+        )}
         {layout.sidebarVisible && (
           <>
             <div className="sidebar" style={{ width: layout.sidebarWidth }}>
-              <ErrorBoundary label="Sidebar">
-                {layout.sidebarView === "explorer" && <Explorer />}
-                {layout.sidebarView === "search" && <SearchPanel />}
-                {layout.sidebarView === "chats" && <ChatList />}
-              </ErrorBoundary>
+              <SidebarShell>
+                <ErrorBoundary label="Sidebar">
+                  {layout.sidebarView === "explorer" && <Explorer />}
+                  {layout.sidebarView === "search" && <SearchPanel />}
+                  {layout.sidebarView === "chats" && <ChatList />}
+                </ErrorBoundary>
+              </SidebarShell>
             </div>
             <Splitter dir="v" onStart={() => (base.current = layout.sidebarWidth)} onDrag={(d) => setLayout({ sidebarWidth: clamp(base.current + d, 180, 560) })} />
           </>

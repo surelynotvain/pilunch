@@ -50,8 +50,8 @@ const LAYOUT_KEY = "pilunch.layout";
 function loadLayout(): Layout {
   const def: Layout = {
     sidebarVisible: true,
-    sidebarView: "explorer",
-    sidebarWidth: 260,
+    sidebarView: "chats",
+    sidebarWidth: 272,
     chatWidth: 440,
     terminalVisible: false,
     terminalHeight: 260,
